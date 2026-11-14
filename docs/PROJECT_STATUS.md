@@ -14,7 +14,11 @@ Flowent implements a runnable educational approval workspace. Its definition of 
 ## Ограничения / Limits
 
 - The compiler runs a documented BPMN subset. Boundary and message events, subprocesses, arbitrary cycles, unstructured parallelism and model migration are outside this implementation.
+- The expense route uses amount, the IT route uses the privileged flag, and travel uses the budget threshold. Category and purpose are retained as form data. A financial budget ledger, system sensitivity catalog and travel date-window policy are pending.
 - Business rules, assignments and form schemas are edited in the BPMN XML configuration. Dedicated visual rule and form designers and semantic version comparison are pending.
+- Task claim uses a combined eligible and assigned inbox. Group identifiers are fixed and self-service reassignment is pending.
 - Service notification records a local event. An external delivery adapter and a notification inbox are pending.
 - SLA and task performance are available as reports. Notification delivery and business calendars are outside the current SLA implementation.
+- The available report shows counts and task-duration percentiles. Dedicated bottleneck detection and richer historical filtering are pending.
+- The OpenAPI export is generated from FastAPI. Response bodies for several endpoints still use generic OpenAPI schemas.
 - The test suite covers local concurrency and persistence. Load certification and production deployment are outside this project.

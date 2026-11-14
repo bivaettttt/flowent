@@ -271,7 +271,7 @@ tr:last-child td {
   background: #fbfcff;
   position: relative;
 }
-.diagram .waiting .djs-visual > * {
+.diagram .waiting .djs-visual > :first-child {
   stroke: #245be0 !important;
   stroke-width: 3px !important;
 }
@@ -353,7 +353,7 @@ pre {
 }
 
 .diagram .completed-node .djs-visual > :first-child {
-  stroke: #268367;
+  stroke: #268367 !important;
 }
 .diagram .blocked-node .djs-visual > :first-child {
   stroke: #b93b30 !important;
