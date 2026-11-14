@@ -1,0 +1,14 @@
+sequenceDiagram
+    actor Manager
+    participant API
+    participant Compiler
+    participant PostgreSQL
+    Manager->>API: Publish with expected revision and idempotency key
+    API->>PostgreSQL: Verify command receipt and lock definition
+    API->>Compiler: Validate XSD and executable semantics
+    alt valid draft and active groups
+      API->>PostgreSQL: Insert version, update active pointer, save audit and receipt
+      API-->>Manager: 201 with version ID
+    else invalid or stale
+      API-->>Manager: 409 or 422 with details
+    end

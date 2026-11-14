@@ -1,0 +1,12 @@
+C4Container
+Person(user, "Flowent user")
+System_Boundary(b, "Flowent") {
+ Container(web, "Workspace", "React, bpmn-js and nginx", "Visual modeling and execution monitors")
+ Container(api, "API", "FastAPI", "Validation, publication and task commands")
+ Container(worker, "Worker", "Python", "Durable timer and service actions")
+ ContainerDb(db, "Execution store", "PostgreSQL", "Definitions, versions, tokens, jobs and events")
+}
+Rel(user,web,"Works in")
+Rel(web,api,"Calls","JSON over HTTP")
+Rel(api,db,"Commits commands")
+Rel(worker,db,"Executes due jobs")

@@ -1,0 +1,8 @@
+C4Context
+Person(staff, "Employee or approver", "Starts requests and completes work")
+Person(analyst, "Process analyst", "Models and validates")
+Person(manager, "Manager or administrator", "Publishes and monitors")
+System(flowent, "Flowent", "Models and executes a defined BPMN subset")
+Rel(staff,flowent,"Uses")
+Rel(analyst,flowent,"Designs")
+Rel(manager,flowent,"Operates")

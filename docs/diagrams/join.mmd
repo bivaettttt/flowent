@@ -1,0 +1,13 @@
+sequenceDiagram
+ actor Manager
+ actor Finance
+ participant API
+ participant DB as PostgreSQL
+ Manager->>API: Complete claimed task
+ API->>DB: Lock instance and persist branch A arrival
+ DB-->>API: Branch B still open
+ Finance->>API: Complete claimed task
+ API->>DB: Lock instance and persist branch B arrival
+ API->>DB: Verify exact set for this fork UUID
+ API->>DB: Consume arrivals and enqueue one outgoing token
+ DB-->>API: Committed JOINED and successor

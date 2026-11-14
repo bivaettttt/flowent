@@ -1,0 +1,6 @@
+stateDiagram-v2
+    [*] --> RUNNING: Start pinned version
+    RUNNING --> COMPLETED: No active tokens remain
+    RUNNING --> INCIDENT: Service attempts exhausted
+    INCIDENT --> RUNNING: Authorized retry
+    COMPLETED --> [*]

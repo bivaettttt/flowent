@@ -1,0 +1,11 @@
+sequenceDiagram
+    actor Assignee
+    participant API
+    participant PostgreSQL
+    participant Engine
+    Assignee->>API: Complete task with values and idempotency key
+    API->>PostgreSQL: Lock instance and verify task access and state
+    API->>Engine: Validate pinned form
+    Engine->>PostgreSQL: Persist submission and advance token
+    Engine->>PostgreSQL: Commit downstream state, receipt and event
+    API-->>Assignee: 200 with result

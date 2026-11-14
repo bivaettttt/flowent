@@ -1,0 +1,12 @@
+stateDiagram-v2
+ [*] --> READY
+ READY --> TASK: Open user task
+ READY --> TIMER: Schedule timer job
+ READY --> SERVICE: Schedule service job
+ READY --> JOIN: Record a branch arrival
+ READY --> DONE: Route or reach end
+ TASK --> DONE: Claimed task completed
+ TIMER --> DONE: Due timer fired
+ SERVICE --> DONE: Service commits
+ JOIN --> DONE: Every fork branch arrived
+ DONE --> [*]

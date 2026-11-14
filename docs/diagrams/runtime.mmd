@@ -1,0 +1,12 @@
+erDiagram
+ DEFINITIONS ||--o{ VERSIONS : publishes
+ VERSIONS ||--o{ INSTANCES : pins
+ USERS ||--o{ SESSIONS : authenticates
+ USERS ||--o{ TASKS : claims
+ INSTANCES ||--o{ TOKENS : owns
+ TOKENS ||--o| TASKS : waits
+ TOKENS ||--o| JOBS : schedules
+ TOKENS ||--o| JOINS : arrives
+ JOBS ||--o{ INCIDENTS : blocks
+ INSTANCES ||--o{ EVENTS : traces
+ USERS ||--o{ RECEIPTS : deduplicates

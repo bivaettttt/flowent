@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> OPEN: Token enters user task
+    OPEN --> CLAIMED: Eligible actor claims task
+    CLAIMED --> DONE: Assignee submits valid form
+    DONE --> [*]
+    note right of CLAIMED
+      SLA sets an orthogonal escalation flag
+    end note
