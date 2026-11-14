@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+export FLOWENT_LAB_MODE=1 FLOWENT_PORT="${FLOWENT_LAB_PORT:-8121}"
+dc() { docker compose -p flowent-lab "$@"; }
+trap 'dc start worker >/dev/null 2>&1 || true' EXIT
+dc stop worker
+instance=$(dc exec -T api python - <<'PY'
+import os
+from uuid import uuid4
+import httpx
+
+client=httpx.Client(base_url="http://127.0.0.1:8000/api/", timeout=8)
+def login(name):
+    r=client.post("auth/login",json={"login":name,"password":os.environ["DEMO_PASSWORD"]})
+    r.raise_for_status()
+    return r.json()["token"]
+def request(token,method,path,body=None):
+    r=client.request(method,path,json=body,headers={"Authorization":"Bearer "+token,"Idempotency-Key":uuid4().hex})
+    r.raise_for_status()
+    return r.json()
+
+employee,approver,admin=(login(user) for user in ("employee","approver","admin"))
+definition=next(d for d in request(employee,"GET","process-definitions") if d["code"]=="ACCESS")
+instance=request(employee,"POST",f"process-definitions/{definition['id']}/start",{"values":{"system":"Demo","privileged":False,"purpose":"Restart evidence"}})
+path=f"process-instances/{instance['id']}"
+task=request(employee,"GET",path)["tasks"][0]
+request(approver,"POST",f"tasks/{task['id']}/claim",{"values":{}})
+request(approver,"POST",f"tasks/{task['id']}/complete",{"values":{"result":"approve","comment":"Approved"}})
+request(admin,"PUT","lab/clock",{"seconds":10})
+state=request(employee,"GET",path)
+assert state["tokens"][0]["status"]=="TIMER"
+assert state["jobs"][0]["status"]=="WAITING"
+print(instance["id"])
+PY
+)
+dc restart api
+dc up -d --wait
+dc exec -T -e INSTANCE="$instance" api python - <<'PY'
+import os
+from time import monotonic,sleep
+from flowent.store import db, one, sql
+
+deadline=monotonic()+15
+while monotonic()<deadline:
+    with db.connect() as conn:
+        ready=one(conn,"SELECT id FROM tasks WHERE instance=:i AND node='Fulfil'",i=os.environ["INSTANCE"])
+        if ready:
+            assert sql(conn,"SELECT count(*) FROM events WHERE instance=:i AND action='TIMER_FIRED'",i=os.environ["INSTANCE"]).scalar_one()==1
+            break
+    sleep(.25)
+else:
+    raise SystemExit("Durable timer was not recovered")
+PY
+echo 'API and worker restart preserved the timer, which fired once'

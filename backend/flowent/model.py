@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from lxml import etree
 
 BPMN = "http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -97,7 +98,7 @@ def form_schema(schema, identifier):
         )
     try:
         Draft202012Validator.check_schema(schema)
-    except Exception as error:
+    except SchemaError as error:
         raise Invalid(identifier, "Invalid form schema") from error
 
 
@@ -142,7 +143,7 @@ def compile_model(source):
     identifier = process.get("id")
     try:
         config = json.loads(process.findtext(tag("documentation")) or "{}")
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
         raise Invalid(identifier, "Invalid Flowent JSON documentation") from error
     keys_only(
         config, {"input", "tasks", "actions", "rules", "pairs", "sla"}, identifier
@@ -263,7 +264,9 @@ def compile_model(source):
             task = config["tasks"].get(id, {})
             keys_only(task, {"group", "form", "sla", "priority"}, id)
             require(
-                task.get("group") in GROUPS, id, "Select a supported assignment group"
+                task.get("group") in tuple(GROUPS),
+                id,
+                "Select a supported assignment group",
             )
             for key, default, bound in (
                 ("sla", 3600, SECONDS_LIMIT),
@@ -278,7 +281,7 @@ def compile_model(source):
             action = config["actions"].get(id, {})
             keys_only(action, {"type", "message"}, id)
             require(
-                action.get("type") in ACTIONS
+                action.get("type") in tuple(ACTIONS)
                 and isinstance(action.get("message"), str)
                 and 1 <= len(action["message"]) <= 240,
                 id,
@@ -317,7 +320,7 @@ def compile_model(source):
                 and re.fullmatch(
                     r"(?:input|[A-Za-z_][\w.-]*)/[A-Za-z][\w]*", rule["field"]
                 )
-                and rule.get("op") in OPERATORS
+                and rule.get("op") in tuple(OPERATORS)
                 and type(rule.get("value"))
                 in ((str, int, bool) if rule.get("op") == "eq" else (int,)),
                 id,

@@ -24,6 +24,17 @@ def publish(conn, id, actor, request, revision):
     if definition["revision"] != revision or definition["archived"]:
         raise HTTPException(409, "REVISION_CONFLICT")
     model = compile_model(definition["draft"])
+    groups = {task["group"] for task in model["config"]["tasks"].values()} - {
+        "employees"
+    }
+    for group in sorted(groups):
+        if not one(
+            conn,
+            "SELECT id FROM users WHERE :g=ANY(groups) AND role IN ('EMPLOYEE','APPROVER') LIMIT 1",
+            g=group,
+        ):
+            raise HTTPException(422, {"code": "GROUP_EMPTY", "group": group})
+
     previous = one(
         conn, "SELECT xml FROM versions WHERE id=:i", i=definition["active_version"]
     )
@@ -177,7 +188,8 @@ def retry(conn, id, actor, request, note):
 def visible(conn, id, actor):
     item = one(
         conn,
-        """SELECT i.*,v.xml,v.number,d.name FROM instances i JOIN versions v ON v.id=i.version
+        """SELECT i.*,v.xml,v.number,d.name,u.name AS initiator FROM instances i JOIN versions v ON v.id=i.version
+                    JOIN users u ON u.id=i.owner
                     JOIN definitions d ON d.id=v.definition WHERE i.id=:i""",
         i=id,
     )

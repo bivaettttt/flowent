@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+export FLOWENT_LAB_MODE=1 FLOWENT_PORT="${FLOWENT_LAB_PORT:-8121}"
+case "${1:-up}" in
+ up) docker compose -p flowent-lab up -d --build --wait ;;
+ stop) docker compose -p flowent-lab down ;;
+ reset) docker compose -p flowent-lab down -v; docker compose -p flowent-lab up -d --build --wait ;;
+ *) exit 2 ;;
+esac

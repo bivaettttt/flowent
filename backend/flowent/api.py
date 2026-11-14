@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from flowent import contracts as c
 from flowent.access import Actor, authenticate, passwords, role
 from flowent.engine import history, now, receipt
+from flowent.lab import Scenario, run
 from flowent.model import EMPTY_FORM, Invalid, compile_model
 from flowent.operations import publish, retry, start, task_access, task_action, visible
 from flowent.store import db, many, one, sql
@@ -384,6 +385,7 @@ def reports(actor: Actor):
             "instances": many(
                 conn,
                 """SELECT d.code,v.number,i.status,count(*) AS count,
+                     round(avg(extract(epoch FROM i.completed_at-i.created_at))) AS mean_seconds,
                      count(*) FILTER(WHERE COALESCE(i.completed_at,:now)>i.due_at) AS late
                      FROM instances i JOIN versions v ON v.id=i.version JOIN definitions d ON d.id=v.definition
                      GROUP BY d.code,v.number,i.status ORDER BY d.code,v.number,i.status""",
@@ -391,7 +393,13 @@ def reports(actor: Actor):
             ),
             "tasks": many(
                 conn,
-                "SELECT work_group,status,count(*) AS count,count(*) FILTER(WHERE escalated) AS escalated FROM tasks GROUP BY work_group,status ORDER BY work_group,status",
+                """SELECT t.work_group,t.status,u.name AS assignee,count(*) AS count,
+                       count(*) FILTER(WHERE escalated) AS escalated,
+                       round(percentile_cont(.5) WITHIN GROUP (ORDER BY extract(epoch FROM t.completed_at-e.created_at))::numeric) AS median_seconds,
+                       round(percentile_cont(.95) WITHIN GROUP (ORDER BY extract(epoch FROM t.completed_at-e.created_at))::numeric) AS p95_seconds
+                    FROM tasks t LEFT JOIN users u ON u.id=t.assignee
+                    LEFT JOIN events e ON e.action='ENTERED' AND e.detail->>'token'=t.token::text AND e.instance=t.instance
+                    GROUP BY t.work_group,t.status,u.name ORDER BY t.work_group,t.status,u.name""",
             ),
         }
 
@@ -421,3 +429,20 @@ def clock(payload: c.Clock, actor: Actor, request: Request):
         )
         history(conn, None, request.state.id, actor["id"], "LAB_CLOCK", **result)
         return result
+
+
+@app.post("/api/lab/run/{scenario}")
+def experiment(scenario: Scenario, actor: Actor):
+    role(actor, "ADMIN")
+    if os.getenv("LAB_MODE") != "1":
+        raise HTTPException(403, "LAB_DISABLED")
+    # A dedicated lock keeps the synthetic clock and fault switch deterministic across runs.
+    with db.begin() as conn:
+        if not sql(conn, "SELECT pg_try_advisory_xact_lock(771201)").scalar_one():
+            raise HTTPException(409, "LAB_BUSY")
+        try:
+            return run(scenario)
+        except (RuntimeError, StopIteration) as error:
+            raise HTTPException(
+                500, {"code": "LAB_FAILED", "message": str(error)}
+            ) from error
