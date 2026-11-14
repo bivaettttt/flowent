@@ -58,6 +58,7 @@ export type Definition = {
   number?: number;
   draft: string;
   active_version: string | null;
+  current?: { number: number } | null;
   archived: boolean;
   input: Form | null;
   versions: { id: string; number: number; created_at: string }[];

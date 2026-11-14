@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from xml.etree import ElementTree as E
 
+from flowent import expense_di
 from flowent.model import BPMN
 
 DI = "http://www.omg.org/spec/BPMN/20100524/DI"
@@ -185,14 +186,32 @@ def model(code, name, input_form, condition, secondary, finish, action, ground):
         id="Plane",
         bpmnElement=code,
     )
+    if code == "EXPENSE":
+        shapes = {id: expense_di.BOUNDS[id] for id in shapes}
     for id, (x, y, w, h) in shapes.items():
         shape = child(plane, DI, "BPMNShape", id=id + "_di", bpmnElement=id)
         child(shape, DC, "Bounds", x=str(x), y=str(y), width=str(w), height=str(h))
+        if code == "EXPENSE" and id in expense_di.LABELS:
+            label = child(shape, DI, "BPMNLabel")
+            child(
+                label,
+                DC,
+                "Bounds",
+                **dict(
+                    zip(
+                        ("x", "y", "width", "height"),
+                        map(str, expense_di.LABELS[id]),
+                        strict=True,
+                    )
+                ),
+            )
     for id, src, dst in connections:
         edge = child(plane, DI, "BPMNEdge", id=id + "_di", bpmnElement=id)
         x, y, w, h = shapes[src]
         tx, ty, tw, th = shapes[dst]
-        if tx >= x + w:
+        if code == "EXPENSE":
+            points = expense_di.WAYPOINTS[id]
+        elif tx >= x + w:
             points = [(x + w, y + h // 2), (tx, ty + th // 2)]
         else:
             points = [

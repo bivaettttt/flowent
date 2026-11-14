@@ -266,6 +266,55 @@ tr:last-child td {
   grid-template-columns: 1fr 1.25fr;
   gap: 1rem;
 }
+.diagram-frame {
+  position: relative;
+}
+.editable .diagram {
+  height: clamp(380px, 54vh, 570px);
+}
+.diagram-fit {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 0.8rem;
+}
+.element-properties {
+  min-height: 88px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0.68rem 1rem;
+}
+.element-properties h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.87rem;
+}
+.element-properties p {
+  font-size: 0.87rem;
+}
+.element-properties .toolbar {
+  padding: 0;
+}
+.diagram-import {
+  position: relative;
+  align-self: end;
+  padding: 0.55rem 0.73rem;
+  border: 1px solid #c6d4ea;
+  border-radius: 7px;
+  font-size: inherit;
+  cursor: pointer;
+}
+.diagram-import input {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.diagram-import:focus-within {
+  outline: 2px solid #3564df;
+  outline-offset: 3px;
+}
 .diagram {
   height: 435px;
   background: #fbfcff;

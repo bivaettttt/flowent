@@ -4,7 +4,9 @@ Flowent executes a defined subset of BPMN 2.0. Import or edit a model, publish a
 
 [Русский](README.ru.md) · [English](README.en.md) · [OpenAPI](docs/openapi.json) · [Verification](docs/verification.md)
 
-![Flowent BPMN modeler](assets/screenshots/designer.png)
+[![Flowent BPMN editor showing the corporate expense approval process](assets/screenshots/expense-editor.png)](assets/screenshots/expense-editor.png)
+
+[Full-size screenshot · Полноразмерный скриншот](assets/screenshots/expense-editor.png)
 
 Start with `docker compose up --build --wait` and open the [local workspace](http://127.0.0.1:8120).
 

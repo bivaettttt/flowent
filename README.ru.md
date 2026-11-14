@@ -37,6 +37,12 @@ scripts/lab up
 
 Пошаговый маршрут, скриншоты и запись доступны в [демонстрации](docs/demo.md).
 
+## Редактор BPMN
+
+[![Процесс согласования корпоративных расходов в редакторе Flowent](assets/screenshots/expense-editor.png)](assets/screenshots/expense-editor.png)
+
+[Полноразмерный скриншот](assets/screenshots/expense-editor.png)
+
 ## Архитектура и API
 
 React и bpmn-js работают с FastAPI через nginx. PostgreSQL хранит определения, версии, экземпляры, токены, задачи, квитанции команд и журнал событий. Отдельный worker выбирает созревшие задания из PostgreSQL и выполняет таймеры, SLA и сервисные задачи. Токен сессии хранится в памяти браузера до перезагрузки страницы.

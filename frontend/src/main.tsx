@@ -576,11 +576,19 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
       <a href="#registry">← Реестр</a>
       <Head
         title={d.name}
-        sub={
-          d.code +
-          " · " +
-          (version ? "Версия " + version.number : "Редакция " + d.revision)
-        }
+        sub={[
+          d.code,
+          version
+            ? "Версия " + version.number
+            : edit
+              ? "Черновик · редакция " + d.revision
+              : null,
+          !version && d.current
+            ? "Опубликована версия " + d.current.number
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       />
       <ErrorBox error={act.error ?? data.error} />
       <Panel title="Модель BPMN">
@@ -612,8 +620,8 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
           </button>
           {edit && (
             <>
-              <label>
-                Импорт XML
+              <label className="diagram-import">
+                <span>Импорт XML</span>
                 <input
                   type="file"
                   accept=".bpmn,.xml"

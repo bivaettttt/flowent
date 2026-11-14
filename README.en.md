@@ -37,6 +37,12 @@ Open [Flowent Lab](http://127.0.0.1:8121) as `admin`. Use `scripts/lab stop` to 
 
 See the [walkthrough and captures](docs/demo.md).
 
+## BPMN editor
+
+[![Corporate expense approval in the Flowent BPMN editor](assets/screenshots/expense-editor.png)](assets/screenshots/expense-editor.png)
+
+[Full-size screenshot](assets/screenshots/expense-editor.png)
+
 ## Architecture and API
 
 React and bpmn-js call FastAPI through nginx. PostgreSQL stores definitions, versions, instances, tokens, human tasks, command receipts, and audit events. A separate worker polls for due jobs and processes timers, SLA deadlines and service tasks. Browser sessions use bearer tokens held in memory for the lifetime of the page.

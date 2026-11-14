@@ -25,6 +25,53 @@ async function shot(page: Page, name: string) {
   });
 }
 
+test("expense editor fits the seeded BPMN beside its palette", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await login(page, "analyst");
+  await nav(page, "Корпоративные расходы");
+  await expect(
+    page.getByRole("heading", { name: "Корпоративные расходы" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Опубликована версия", { exact: false }),
+  ).toBeVisible();
+  await expect(page.locator('.djs-shape[data-element-id="End"]')).toBeVisible();
+  await button(page, "Вписать в экран");
+  const geometry = () =>
+    page.locator(".diagram").evaluate((canvas) => {
+      const drawing = canvas
+        .querySelector(".viewport")!
+        .getBoundingClientRect();
+      const palette = canvas
+        .querySelector(".djs-palette")!
+        .getBoundingClientRect();
+      const bounds = canvas.getBoundingClientRect();
+      return {
+        clearance: drawing.left - palette.right,
+        right: bounds.right - drawing.right,
+        top: drawing.top - bounds.top,
+        bottom: bounds.bottom - drawing.bottom,
+      };
+    });
+  for (const distance of Object.values(await geometry()))
+    expect(distance).toBeGreaterThan(12);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(errors).toEqual([]);
+  if (process.env.FLOWENT_SHOTS) {
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await button(page, "Вписать в экран");
+    for (const distance of Object.values(await geometry()))
+      expect(distance).toBeGreaterThan(12);
+    await page.locator("body").click({ position: { x: 4, y: 4 } });
+    await expect(page.locator(".diagram .selected")).toHaveCount(0);
+    await shot(page, "expense-editor");
+  }
+});
+
 test("visual BPMN edit survives save, validation, deployment and execution", async ({
   page,
 }) => {
@@ -61,7 +108,6 @@ test("visual BPMN edit survives save, validation, deployment and execution", asy
   await expect(
     page.locator('.djs-shape[data-element-id="Solo"]'),
   ).toContainText("Решение по заявке E2E");
-  await shot(page, "designer");
   const saved = page.waitForResponse(
     (r) =>
       r.request().method() === "PUT" &&

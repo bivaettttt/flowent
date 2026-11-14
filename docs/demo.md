@@ -6,7 +6,7 @@
 
 ## Captures
 
-![Editing a BPMN task and its properties](../assets/screenshots/designer.png)
+![Corporate expense approval in the BPMN editor](../assets/screenshots/expense-editor.png)
 
 ![Execution monitor with an active review](../assets/screenshots/monitor.png)
 
@@ -14,7 +14,7 @@
 | --- | --- |
 | Обзор рабочей области | [Dashboard](../assets/screenshots/dashboard.png) |
 | Реестр | [Process registry](../assets/screenshots/registry.png) |
-| Редактор | [BPMN designer](../assets/screenshots/designer.png) |
+| Редактор | [BPMN designer](../assets/screenshots/expense-editor.png) |
 | Валидация | [Validation](../assets/screenshots/validation.png) |
 | Публикация и история версий | [Versions](../assets/screenshots/versions.png) |
 | Очередь задач | [Task inbox](../assets/screenshots/inbox.png) |
