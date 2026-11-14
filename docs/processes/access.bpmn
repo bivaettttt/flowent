@@ -1,0 +1,218 @@
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions" targetNamespace="urn:flowent:demo">
+  <bpmn:process id="ACCESS" name="Предоставление ИТ-доступа" isExecutable="true">
+    <bpmn:documentation>{"input": {"type": "object", "properties": {"system": {"type": "string", "title": "Система", "minLength": 1, "maxLength": 180}, "privileged": {"type": "boolean", "title": "Привилегированный доступ"}, "purpose": {"type": "string", "title": "Обоснование", "minLength": 1, "maxLength": 180}}, "required": ["system", "privileged", "purpose"], "additionalProperties": false}, "rules": {"complex": {"field": "input/privileged", "op": "eq", "value": true}, "soloNo": {"field": "Solo/result", "op": "eq", "value": "reject"}, "soloRev": {"field": "Solo/result", "op": "eq", "value": "revise"}, "leadNo": {"field": "Lead/result", "op": "eq", "value": "reject"}, "leadRev": {"field": "Lead/result", "op": "eq", "value": "revise"}, "extraNo": {"field": "Second/result", "op": "eq", "value": "reject"}, "extraRev": {"field": "Second/result", "op": "eq", "value": "revise"}}, "pairs": {"Split": "Join"}, "sla": 7200, "tasks": {"Solo": {"group": "managers", "form": {"type": "object", "properties": {"result": {"type": "string", "title": "Решение", "enum": ["approve", "reject", "revise"]}, "comment": {"type": "string", "title": "Комментарий", "minLength": 1, "maxLength": 240}}, "required": ["result", "comment"], "additionalProperties": false}, "sla": 10, "priority": 50}, "Lead": {"group": "managers", "form": {"type": "object", "properties": {"result": {"type": "string", "title": "Решение", "enum": ["approve", "reject", "revise"]}, "comment": {"type": "string", "title": "Комментарий", "minLength": 1, "maxLength": 240}}, "required": ["result", "comment"], "additionalProperties": false}, "sla": 3600, "priority": 50}, "Second": {"group": "security", "form": {"type": "object", "properties": {"result": {"type": "string", "title": "Решение", "enum": ["approve", "reject", "revise"]}, "comment": {"type": "string", "title": "Комментарий", "minLength": 1, "maxLength": 240}}, "required": ["result", "comment"], "additionalProperties": false}, "sla": 3600, "priority": 80}, "Revision": {"group": "employees", "form": {"type": "object", "properties": {"note": {"type": "string", "title": "Уточнение", "minLength": 1}}, "required": ["note"], "additionalProperties": false}, "sla": 3600, "priority": 50}, "Fulfil": {"group": "it", "form": {"type": "object", "properties": {"note": {"type": "string", "title": "Подтверждение", "minLength": 1}}, "required": ["note"], "additionalProperties": false}, "sla": 3600, "priority": 50}}, "actions": {"Service": {"type": "notify", "message": "Учебная операция выполнена"}}}</bpmn:documentation>
+    <bpmn:startEvent id="Start" />
+    <bpmn:exclusiveGateway id="Route" name="Маршрут" default="simple" />
+    <bpmn:userTask id="Solo" name="Стандартное согласование" />
+    <bpmn:parallelGateway id="Split" name="Два согласования" />
+    <bpmn:userTask id="Lead" name="Решение руководителя" />
+    <bpmn:userTask id="Second" name="Проверка безопасности" />
+    <bpmn:parallelGateway id="Join" name="Обе ветки" />
+    <bpmn:userTask id="Revision" name="Уточнить заявку" />
+    <bpmn:intermediateCatchEvent id="Wait" name="Ожидание">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT5S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:serviceTask id="Service" name="Регистрация результата" />
+    <bpmn:userTask id="Fulfil" name="Предоставить доступ" />
+    <bpmn:endEvent id="End" name="Завершено" />
+    <bpmn:endEvent id="Reject" name="Отклонено" />
+    <bpmn:exclusiveGateway id="SoloDecision" name="Обычный исход" default="soloOk" />
+    <bpmn:exclusiveGateway id="LeadDecision" name="Руководитель" default="leadOk" />
+    <bpmn:exclusiveGateway id="SecondDecision" name="Вторая ветвь" default="extraOk" />
+    <bpmn:exclusiveGateway id="Entry" name="Вход" />
+    <bpmn:sequenceFlow id="begin" sourceRef="Start" targetRef="Entry" />
+    <bpmn:sequenceFlow id="complex" sourceRef="Route" targetRef="Split">
+      <bpmn:conditionExpression>complex</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="simple" sourceRef="Route" targetRef="Solo" />
+    <bpmn:sequenceFlow id="splitLead" sourceRef="Split" targetRef="Lead" />
+    <bpmn:sequenceFlow id="splitSecond" sourceRef="Split" targetRef="Second" />
+    <bpmn:sequenceFlow id="leadJoin" sourceRef="Lead" targetRef="Join" />
+    <bpmn:sequenceFlow id="secondJoin" sourceRef="Second" targetRef="Join" />
+    <bpmn:sequenceFlow id="joined" sourceRef="Join" targetRef="LeadDecision" />
+    <bpmn:sequenceFlow id="soloResult" sourceRef="Solo" targetRef="SoloDecision" />
+    <bpmn:sequenceFlow id="soloNo" sourceRef="SoloDecision" targetRef="Reject">
+      <bpmn:conditionExpression>soloNo</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="soloRev" sourceRef="SoloDecision" targetRef="Revision">
+      <bpmn:conditionExpression>soloRev</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="soloOk" sourceRef="SoloDecision" targetRef="Wait" />
+    <bpmn:sequenceFlow id="leadNo" sourceRef="LeadDecision" targetRef="Reject">
+      <bpmn:conditionExpression>leadNo</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="leadRev" sourceRef="LeadDecision" targetRef="Revision">
+      <bpmn:conditionExpression>leadRev</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="leadOk" sourceRef="LeadDecision" targetRef="SecondDecision" />
+    <bpmn:sequenceFlow id="extraNo" sourceRef="SecondDecision" targetRef="Reject">
+      <bpmn:conditionExpression>extraNo</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="extraRev" sourceRef="SecondDecision" targetRef="Revision">
+      <bpmn:conditionExpression>extraRev</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="extraOk" sourceRef="SecondDecision" targetRef="Wait" />
+    <bpmn:sequenceFlow id="resubmit" sourceRef="Revision" targetRef="Entry" />
+    <bpmn:sequenceFlow id="ready" sourceRef="Wait" targetRef="Service" />
+    <bpmn:sequenceFlow id="done" sourceRef="Service" targetRef="Fulfil" />
+    <bpmn:sequenceFlow id="close" sourceRef="Fulfil" targetRef="End" />
+    <bpmn:sequenceFlow id="entryRoute" sourceRef="Entry" targetRef="Route" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="Diagram">
+    <bpmndi:BPMNPlane id="Plane" bpmnElement="ACCESS">
+      <bpmndi:BPMNShape id="Start_di" bpmnElement="Start">
+        <dc:Bounds x="20" y="160" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Route_di" bpmnElement="Route">
+        <dc:Bounds x="105" y="160" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Solo_di" bpmnElement="Solo">
+        <dc:Bounds x="210" y="60" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Split_di" bpmnElement="Split">
+        <dc:Bounds x="210" y="220" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lead_di" bpmnElement="Lead">
+        <dc:Bounds x="330" y="140" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Second_di" bpmnElement="Second">
+        <dc:Bounds x="330" y="305" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Join_di" bpmnElement="Join">
+        <dc:Bounds x="530" y="220" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Revision_di" bpmnElement="Revision">
+        <dc:Bounds x="730" y="60" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Wait_di" bpmnElement="Wait">
+        <dc:Bounds x="735" y="220" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Service_di" bpmnElement="Service">
+        <dc:Bounds x="840" y="220" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Fulfil_di" bpmnElement="Fulfil">
+        <dc:Bounds x="1020" y="220" width="145" height="66" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_di" bpmnElement="End">
+        <dc:Bounds x="1210" y="240" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Reject_di" bpmnElement="Reject">
+        <dc:Bounds x="740" y="405" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="SoloDecision_di" bpmnElement="SoloDecision">
+        <dc:Bounds x="450" y="25" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="LeadDecision_di" bpmnElement="LeadDecision">
+        <dc:Bounds x="620" y="190" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="SecondDecision_di" bpmnElement="SecondDecision">
+        <dc:Bounds x="620" y="305" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Entry_di" bpmnElement="Entry">
+        <dc:Bounds x="67" y="160" width="38" height="38" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="begin_di" bpmnElement="begin">
+        <di:waypoint x="58" y="179" />
+        <di:waypoint x="67" y="179" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="complex_di" bpmnElement="complex">
+        <di:waypoint x="143" y="179" />
+        <di:waypoint x="210" y="239" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="simple_di" bpmnElement="simple">
+        <di:waypoint x="143" y="179" />
+        <di:waypoint x="210" y="93" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="splitLead_di" bpmnElement="splitLead">
+        <di:waypoint x="248" y="239" />
+        <di:waypoint x="330" y="173" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="splitSecond_di" bpmnElement="splitSecond">
+        <di:waypoint x="248" y="239" />
+        <di:waypoint x="330" y="338" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="leadJoin_di" bpmnElement="leadJoin">
+        <di:waypoint x="475" y="173" />
+        <di:waypoint x="530" y="239" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="secondJoin_di" bpmnElement="secondJoin">
+        <di:waypoint x="475" y="338" />
+        <di:waypoint x="530" y="239" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="joined_di" bpmnElement="joined">
+        <di:waypoint x="568" y="239" />
+        <di:waypoint x="620" y="209" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="soloResult_di" bpmnElement="soloResult">
+        <di:waypoint x="355" y="93" />
+        <di:waypoint x="450" y="44" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="soloNo_di" bpmnElement="soloNo">
+        <di:waypoint x="488" y="44" />
+        <di:waypoint x="740" y="424" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="soloRev_di" bpmnElement="soloRev">
+        <di:waypoint x="488" y="44" />
+        <di:waypoint x="730" y="93" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="soloOk_di" bpmnElement="soloOk">
+        <di:waypoint x="488" y="44" />
+        <di:waypoint x="735" y="239" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="leadNo_di" bpmnElement="leadNo">
+        <di:waypoint x="658" y="209" />
+        <di:waypoint x="740" y="424" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="leadRev_di" bpmnElement="leadRev">
+        <di:waypoint x="658" y="209" />
+        <di:waypoint x="730" y="93" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="leadOk_di" bpmnElement="leadOk">
+        <di:waypoint x="658" y="209" />
+        <di:waypoint x="673" y="209" />
+        <di:waypoint x="673" y="460" />
+        <di:waypoint x="608" y="460" />
+        <di:waypoint x="608" y="324" />
+        <di:waypoint x="620" y="324" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="extraNo_di" bpmnElement="extraNo">
+        <di:waypoint x="658" y="324" />
+        <di:waypoint x="740" y="424" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="extraRev_di" bpmnElement="extraRev">
+        <di:waypoint x="658" y="324" />
+        <di:waypoint x="730" y="93" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="extraOk_di" bpmnElement="extraOk">
+        <di:waypoint x="658" y="324" />
+        <di:waypoint x="735" y="239" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="resubmit_di" bpmnElement="resubmit">
+        <di:waypoint x="875" y="93" />
+        <di:waypoint x="890" y="93" />
+        <di:waypoint x="890" y="460" />
+        <di:waypoint x="55" y="460" />
+        <di:waypoint x="55" y="179" />
+        <di:waypoint x="67" y="179" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="ready_di" bpmnElement="ready">
+        <di:waypoint x="773" y="239" />
+        <di:waypoint x="840" y="253" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="done_di" bpmnElement="done">
+        <di:waypoint x="985" y="253" />
+        <di:waypoint x="1020" y="253" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="close_di" bpmnElement="close">
+        <di:waypoint x="1165" y="253" />
+        <di:waypoint x="1210" y="259" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="entryRoute_di" bpmnElement="entryRoute">
+        <di:waypoint x="105" y="179" />
+        <di:waypoint x="105" y="179" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
