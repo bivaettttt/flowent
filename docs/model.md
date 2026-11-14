@@ -50,7 +50,7 @@ Tasks transition OPEN → CLAIMED → DONE. A completion transaction validates t
 | ACCESS | privileged = true: lead approver + security | Manager | IT grants access |
 | TRAVEL | budget > 80000 RUB: lead approver + finance | Manager | Employee confirms travel |
 
-Each approval can approve, reject or request clarification. In a parallel case both branches reach the join before decisions are evaluated. A reject or clarification goes to its modeled path, with the lead approver evaluated first. Clarification loops through a user task, outside the structured parallel region. Approval waits five seconds and executes the configured local service before opening completion work.
+The account `manager` publishes definitions. The account `approver` works on approval tasks in the `managers` group. Each approval can approve, reject or request clarification. In a parallel case both branches reach the join before decisions are evaluated. A reject or clarification goes to its modeled path, with the lead approver evaluated first. Clarification loops through a user task, outside the structured parallel region. Approval waits five seconds and executes the configured local service before opening completion work.
 
 ## Interfaces and metrics
 

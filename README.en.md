@@ -16,7 +16,7 @@ Open the [workspace](http://127.0.0.1:8120). Compose binds the demo to loopback,
 | --- | --- |
 | `employee` | Start and track your own requests |
 | `analyst` | Open the BPMN modeler, validate and publish a model |
-| `manager` | Complete manager reviews |
+| `manager` | Publish drafts, monitor execution and open reports |
 | `approver`, `finance`, `security`, `it` | Complete tasks assigned to the corresponding group |
 | `admin` | Inspect incidents, reports, users, and Lab |
 
