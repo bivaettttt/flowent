@@ -8,6 +8,8 @@ Flowent executes a defined subset of BPMN 2.0. Import or edit a model, publish a
 
 [Full-size screenshot · Полноразмерный скриншот](assets/screenshots/expense-editor.png)
 
+[Execution monitor · Монитор исполнения](assets/screenshots/runtime-viewer.png) · [Screenshot gallery · Скриншоты](docs/demo.md) · [UX and regression notes](docs/ux-ui-redesign.md)
+
 Start with `docker compose up --build --wait` and open the [local workspace](http://127.0.0.1:8120).
 
 Запустите той же командой и откройте рабочее пространство. В MVP доступны согласования расходов, ИТ-доступа и командировок, а также изолированная лаборатория исполнения. [Статус и ограничения](docs/PROJECT_STATUS.md)

@@ -43,6 +43,14 @@ See the [walkthrough and captures](docs/demo.md).
 
 [Full-size screenshot](assets/screenshots/expense-editor.png)
 
+## Execution monitor
+
+The monitor links each instance to its immutable BPMN version. Select a step on the diagram or from the text list to investigate active tasks, waiting JOIN branches, timers and SLA breaches. Incident details distinguish a queued retry from confirmed recovery.
+
+[![Flowent execution monitor showing an active review and the running model](assets/screenshots/runtime-viewer.png)](assets/screenshots/runtime-viewer.png)
+
+[Interface gallery](docs/demo.md) · [Redesign and regression notes](docs/ux-ui-redesign.md)
+
 ## Architecture and API
 
 React and bpmn-js call FastAPI through nginx. PostgreSQL stores definitions, versions, instances, tokens, human tasks, command receipts, and audit events. A separate worker polls for due jobs and processes timers, SLA deadlines and service tasks. Browser sessions use bearer tokens held in memory for the lifetime of the page.

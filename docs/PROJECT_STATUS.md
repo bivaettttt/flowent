@@ -7,7 +7,7 @@ Flowent implements a runnable educational approval workspace. Its definition of 
 - 15 pytest unit cases exercised schema and model validation, type-aware routing and typed inputs.
 - The integration suite passed all three BPMN models against PostgreSQL, including role checks, parallel and concurrent transitions, idempotency, timers, SLA, incident recovery and version pinning.
 - The isolated lab verified 14 scenarios over real HTTP and PostgreSQL. Parallel branching and waiting at the join share a scenario. Recovery after a physical restart is verified with `scripts/restart-check`.
-- Both Chromium Playwright cases passed. The first proves that a visual edit survives import, save, publication and execution. The second checks the lab, reports, overview and incidents. Twelve screenshots and a video were captured from these runs.
+- Seven Chromium Playwright cases passed on an isolated PostgreSQL environment. They cover editing and execution, validation and unsaved changes, navigation and pinned versions, branch waiting, timers, SLA, incident history and recovery. The [gallery](demo.md) shows 27 real screenshots. The [redesign record](ux-ui-redesign.md) describes browser checks and acceptance gaps.
 - The normal Compose workspace started with three seeded definitions and rejected lab clock changes with HTTP 403.
 - The Quality workflow runs on pushes and pull requests. The current run history is available in [GitHub Actions](https://github.com/bivaettttt/flowent/actions).
 
