@@ -2,7 +2,7 @@
 
 [Русский](README.ru.md) · [English](README.en.md)
 
-Flowent is an educational workflow platform for approvals. An analyst edits BPMN 2.0 XML, validates it, and publishes an immutable version. The engine executes that version and stores tasks, token transitions, timers, and incidents in PostgreSQL. Existing instances keep their original definition when a new version is published.
+Flowent is an educational workflow platform for approvals. An analyst edits BPMN 2.0 XML and validates the draft. A process manager publishes an immutable version. The engine executes that version and stores tasks, token transitions, timers, and incidents in PostgreSQL. Existing instances keep their original definition when a new version is published.
 
 ## Run locally
 
@@ -15,7 +15,7 @@ Open the [workspace](http://127.0.0.1:8120). Compose binds the demo to loopback,
 | Username | Workflow |
 | --- | --- |
 | `employee` | Start and track your own requests |
-| `analyst` | Open the BPMN modeler, validate and publish a model |
+| `analyst` | Edit BPMN and save and validate drafts |
 | `manager` | Publish drafts, monitor execution and open reports |
 | `approver`, `finance`, `security`, `it` | Complete tasks assigned to the corresponding group |
 | `admin` | Inspect incidents, reports, users, and Lab |
