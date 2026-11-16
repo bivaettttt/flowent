@@ -1,8 +1,13 @@
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/600.css";
 import "./styles.css";
+import "./workbench.css";
 import {
+  Fragment,
   useEffect,
+  useMemo,
+  lazy,
+  Suspense,
   useState,
   useRef,
   type ReactNode,
@@ -20,6 +25,7 @@ import {
   FlaskConical,
   Users,
   LogOut,
+  Menu,
 } from "lucide-react";
 import {
   api,
@@ -33,11 +39,15 @@ import {
   type Form,
   type Row,
 } from "./api";
-import { Diagram, type CanvasAPI } from "./modeler";
+import type { CanvasAPI } from "./modeler";
+import { time, routeOptions, linkTo, returnTo, modelNodes } from "./process";
+const Diagram = lazy(() =>
+  import("./modeler").then((module) => ({ default: module.Diagram })),
+);
 
 const defs = "/process-definitions",
   instances = "/process-instances";
-const stamp = (s: string) => new Date(s).toLocaleString("ru");
+const stamp = time;
 const short = (s: string) => s.slice(0, 8);
 const labels: Record<string, string> = {
   RUNNING: "Исполняется",
@@ -49,29 +59,47 @@ const labels: Record<string, string> = {
   TASK: "Задача",
   JOIN: "Ожидание веток",
   SERVICE: "Сервис",
-  TIMER: "Таймер",
+  TIMER: "BPMN-таймер",
+  WAITING: "Ожидает",
+  BLOCKED: "Заблокировано",
+  QUEUED: "Повтор поставлен в очередь",
+  RETRY_WAITING: "Ожидается следующая попытка",
+  RECOVERED: "Восстановление подтверждено",
+  FAILED: "Повтор завершился сбоем",
+  UNKNOWN: "Результат уточняется",
 };
 function useData<T>(path: string, rev: number) {
-  const [state, set] = useState<{ data?: T; error?: Error; loading: boolean }>({
-    loading: true,
-  });
+  type Result = { path: string; data?: T; error?: Error; loading: boolean };
+  const [state, set] = useState<Result>({ path, loading: Boolean(path) });
   useEffect(() => {
     if (!path) return;
     let active = true;
-    set((s) => ({ data: s.data, loading: true }));
+    set((previous) => ({
+      path,
+      data: previous.path === path ? previous.data : undefined,
+      loading: true,
+    }));
     api<T>(path).then(
       (data) => {
-        if (active) set({ data, loading: false });
+        if (active) set({ path, data, loading: false });
       },
       (error) => {
-        if (active) set({ error, loading: false });
+        if (active)
+          set((previous) => ({
+            path,
+            data: previous.data,
+            error,
+            loading: false,
+          }));
       },
     );
     return () => {
       active = false;
     };
   }, [path, rev]);
-  return state;
+  return state.path === path
+    ? state
+    : ({ path, loading: Boolean(path) } as Result);
 }
 function useAction(refresh: () => void) {
   const [error, setError] = useState<unknown>();
@@ -118,7 +146,7 @@ function Head({
 }) {
   return (
     <header className="head">
-      <div>
+      <div className="title-copy">
         <h1>{title}</h1>
         {sub && <p>{sub}</p>}
       </div>
@@ -149,12 +177,19 @@ function DataTable({
   rows: ReactNode[][];
 }) {
   return rows.length ? (
-    <div className="scroll">
+    <div
+      className="scroll"
+      role="region"
+      tabIndex={0}
+      aria-label={"Таблица · " + columns[0]}
+    >
       <table>
         <thead>
           <tr>
             {columns.map((c, i) => (
-              <th key={i}>{c}</th>
+              <th scope="col" key={i}>
+                {c}
+              </th>
             ))}
           </tr>
         </thead>
@@ -181,11 +216,17 @@ function Status({ value }: { value: string }) {
     <span
       className={
         "status " +
-        (["DONE", "COMPLETED"].includes(value)
+        (["DONE", "COMPLETED", "RECOVERED"].includes(value)
           ? "green"
-          : value === "INCIDENT"
+          : ["INCIDENT", "BLOCKED", "FAILED"].includes(value)
             ? "red"
-            : "")
+            : ["JOIN", "TIMER", "WAITING", "QUEUED", "RETRY_WAITING"].includes(
+                  value,
+                )
+              ? "amber"
+              : value === "UNKNOWN"
+                ? "slate"
+                : "")
       }
     >
       {labels[value] ?? value}
@@ -329,6 +370,14 @@ function Workspace() {
   const [rev, setRev] = useState(0);
   const refresh = () => setRev((r) => r + 1);
   const act = useAction(refresh);
+  const [menu, setMenu] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLElement>(null);
+  const path = route.split("?")[0];
+  useEffect(() => {
+    content.current?.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }, [path, user]);
   const currentRoute = useRef(route);
   const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
   const [destination, setDestination] = useState<string | null>(null);
@@ -404,8 +453,30 @@ function Workspace() {
       ? [{ path: "lab", title: "Лаборатория", Icon: FlaskConical }]
       : []),
   ];
-  const [page, id] = route.split("/");
-  const props = { rev, refresh, user };
+  const [page, id, mode, versionId] = path.split("/");
+  const props = { rev, refresh, user, route };
+  const sections = [
+    ["Моделирование", items.filter((item) => item.path === "registry")],
+    [
+      "Исполнение",
+      items.filter((item) =>
+        ["overview", "instances", "tasks", "reports", "incidents"].includes(
+          item.path,
+        ),
+      ),
+    ],
+    [
+      "Управление",
+      items.filter((item) => ["audit", "users", "lab"].includes(item.path)),
+    ],
+  ] as const;
+  const roleName: Record<string, string> = {
+    PROCESS_ANALYST: "Аналитик процессов",
+    PROCESS_MANAGER: "Менеджер процессов",
+    EMPLOYEE: "Сотрудник",
+    APPROVER: "Согласующий",
+    ADMIN: "Администратор",
+  };
   return (
     <div
       className="shell"
@@ -421,12 +492,23 @@ function Workspace() {
           return;
         const anchor = (event.target as Element).closest("a[href^='#']");
         const next = anchor?.getAttribute("href")?.slice(1);
-        if (next && next !== currentRoute.current) {
+        if (next && next !== "main-content" && next !== currentRoute.current) {
           event.preventDefault();
           setDestination(next);
         }
       }}
     >
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault();
+          content.current?.focus();
+          content.current?.scrollIntoView();
+        }}
+      >
+        К содержимому
+      </a>
       <dialog
         ref={dialog}
         aria-labelledby="leave-title"
@@ -473,18 +555,48 @@ function Workspace() {
         </div>
       </dialog>
       <aside>
-        <Brand />
-        <nav aria-label="Разделы">
-          {items.map(({ path, title, Icon }) => (
-            <a
-              key={path}
-              href={"#" + path}
-              className={page === path ? "active" : ""}
-            >
-              <Icon size={17} />
-              {title}
-            </a>
-          ))}
+        <div className="side-head">
+          <Brand />
+          <button
+            className="menu-toggle"
+            ref={menuButton}
+            aria-controls="sections"
+            aria-expanded={menu}
+            onClick={() => setMenu(!menu)}
+          >
+            <Menu size={16} aria-hidden="true" /> Разделы
+          </button>
+        </div>
+        <nav
+          id="sections"
+          aria-label="Разделы"
+          className={menu ? "menu-open" : ""}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && menu) {
+              setMenu(false);
+              menuButton.current?.focus();
+            }
+          }}
+        >
+          {sections.map(
+            ([group, entries]) =>
+              entries.length > 0 && (
+                <Fragment key={group}>
+                  <p className="nav-category">{group}</p>
+                  {entries.map(({ path, title, Icon }) => (
+                    <a
+                      key={path}
+                      href={"#" + path}
+                      aria-current={page === path ? "page" : undefined}
+                      className={page === path ? "active" : ""}
+                      onClick={() => setMenu(false)}
+                    >
+                      <Icon size={16} aria-hidden="true" /> {title}
+                    </a>
+                  ))}
+                </Fragment>
+              ),
+          )}
         </nav>
         <footer>
           {user.lab ? "Изолированная лаборатория" : "Рабочая область"}
@@ -492,7 +604,9 @@ function Workspace() {
       </aside>
       <div className="workspace">
         <div className="top">
-          <span>{user.role}</span>
+          <span className="identity" title={user.role}>
+            {roleName[user.role] ?? user.role}
+          </span>
           <div>
             {user.name}
             <button
@@ -505,55 +619,72 @@ function Workspace() {
             </button>
           </div>
         </div>
-        <main>
+        <main id="main-content" tabIndex={-1} ref={content}>
           <ErrorBox error={act.error} />
-          {page === "overview" ? (
-            <Overview rev={rev} staff={staff} work={work} />
-          ) : page === "registry" ? (
-            id ? (
-              <Editor key={id} id={id} {...props} leaveGuard={leaveGuard} />
+          <Suspense fallback={<p role="status">Загрузка рабочей области…</p>}>
+            {page === "overview" ? (
+              <Overview rev={rev} staff={staff} work={work} />
+            ) : page === "registry" ? (
+              id ? (
+                mode === "versions" && versionId ? (
+                  <PublishedVersion
+                    key={versionId}
+                    id={id}
+                    version={versionId}
+                    {...props}
+                  />
+                ) : (
+                  <Editor key={id} id={id} {...props} leaveGuard={leaveGuard} />
+                )
+              ) : (
+                <Registry {...props} />
+              )
+            ) : page === "instances" ? (
+              id ? (
+                mode === "model" ? (
+                  <PublishedVersion key={id} instance={id} {...props} />
+                ) : (
+                  <Monitor key={id} id={id} {...props} />
+                )
+              ) : (
+                <Instances {...props} />
+              )
+            ) : page === "tasks" && work ? (
+              id ? (
+                <TaskView key={id} id={id} {...props} />
+              ) : (
+                <Inbox {...props} />
+              )
+            ) : page === "reports" && staff ? (
+              <Reports rev={rev} />
+            ) : page === "incidents" && staff ? (
+              <Incidents {...props} id={id} />
+            ) : page === "audit" && staff ? (
+              <Audit rev={rev} />
+            ) : page === "users" && user.role === "ADMIN" ? (
+              <UsersPage {...props} />
+            ) : page === "lab" && user.lab ? (
+              <Lab {...props} />
             ) : (
-              <Registry {...props} />
-            )
-          ) : page === "instances" ? (
-            id ? (
-              <Monitor key={id} id={id} {...props} />
-            ) : (
-              <Instances {...props} />
-            )
-          ) : page === "tasks" && work ? (
-            id ? (
-              <TaskView key={id} id={id} {...props} />
-            ) : (
-              <Inbox {...props} />
-            )
-          ) : page === "reports" && staff ? (
-            <Reports rev={rev} />
-          ) : page === "incidents" && staff ? (
-            <Incidents {...props} />
-          ) : page === "audit" && staff ? (
-            <Audit rev={rev} />
-          ) : page === "users" && user.role === "ADMIN" ? (
-            <UsersPage {...props} />
-          ) : page === "lab" && user.lab ? (
-            <Lab {...props} />
-          ) : (
-            <Head title="Раздел недоступен" />
-          )}
+              <Head title="Раздел недоступен" />
+            )}
+          </Suspense>
         </main>
       </div>
     </div>
   );
 }
-type Props = { rev: number; refresh: () => void; user: User };
-function Registry({ rev, refresh, user }: Props) {
-  const [query, setQuery] = useState("");
-  const [offset, setOffset] = useState(0);
-  const data = useData<Definition[]>(defs + "?offset=" + offset + query, rev);
+type Props = { rev: number; refresh: () => void; user: User; route: string };
+function Registry({ rev, refresh, user, route }: Props) {
+  const options = routeOptions(route);
+  const query = new URLSearchParams(options);
+  query.set("offset", String(pageOffset(options)));
+  const data = useData<Definition[]>(defs + "?" + query, rev);
   const act = useAction(refresh);
   const [open, setOpen] = useState(false);
   return (
     <>
+      <p className="eyebrow">Моделирование</p>
       <Head
         title="Реестр процессов"
         sub="Модели BPMN, версии и доступные запуски"
@@ -598,57 +729,71 @@ function Registry({ rev, refresh, user }: Props) {
       <Panel title="Процессы">
         <form
           className="toolbar pad"
+          key={options.toString()}
           onSubmit={(e) => {
             const data = fields(e);
-            setQuery(
-              "&q=" +
-                encodeURIComponent(String(data.get("q"))) +
-                "&archived=" +
-                (data.get("archived") === "on"),
-            );
-            setOffset(0);
+            location.hash = linkTo("registry", {
+              q: String(data.get("q")).trim(),
+              archived: data.get("archived") === "on" ? "true" : null,
+              order: String(data.get("order")),
+            });
           }}
         >
           <label>
             Поиск
-            <input name="q" />
+            <input
+              name="q"
+              maxLength={100}
+              defaultValue={options.get("q") ?? ""}
+              placeholder="Название или код"
+            />
           </label>
           {!["EMPLOYEE", "APPROVER"].includes(user.role) && (
             <label className="check">
               Архив
-              <input name="archived" type="checkbox" />
+              <input
+                name="archived"
+                type="checkbox"
+                defaultChecked={options.get("archived") === "true"}
+              />
             </label>
           )}
+          <label>
+            Порядок
+            <select name="order" defaultValue={options.get("order") ?? ""}>
+              <option value="">По коду</option>
+              <option value="name">По названию</option>
+              <option value="updated">По изменению</option>
+            </select>
+          </label>
           <button>Найти</button>
+          {options.size > 0 && <a href="#registry">Сбросить</a>}
         </form>
         {data.loading && !data.data ? (
           <p className="pad">Загрузка…</p>
         ) : (
           <DataTable
-            columns={["Код", "Процесс", "Версия", "Статус"]}
+            columns={["Процесс", "Редакция", "Публикация", "Статус", "Изменён"]}
             rows={(data.data ?? []).map((d) => [
-              <code>{d.code}</code>,
-              <a href={"#registry/" + d.id}>{d.name}</a>,
+              <>
+                <a href={linkTo("registry/" + d.id, { return: "#" + route })}>
+                  {d.name}
+                </a>
+                <br />
+                <code>{d.code}</code>
+              </>,
+              d.revision,
               d.number ? "v" + d.number : "—",
               d.archived
                 ? "Архив"
                 : d.active_version
                   ? "Опубликован"
                   : "Черновик",
+              stamp(d.updated_at),
             ])}
           />
         )}
-        <div className="toolbar pad">
-          <button disabled={!offset} onClick={() => setOffset(offset - 50)}>
-            Назад
-          </button>
-          <button
-            disabled={(data.data?.length ?? 0) < 50}
-            onClick={() => setOffset(offset + 50)}
-          >
-            Далее
-          </button>
-        </div>
+        <Pagination route={route} count={data.data?.length ?? 0} />
       </Panel>
     </>
   );
@@ -662,6 +807,7 @@ function Editor({
   rev,
   refresh,
   user,
+  route,
   leaveGuard,
 }: Props & {
   id: string;
@@ -677,15 +823,17 @@ function Editor({
   const epoch = useRef(0);
   const [validating, setValidating] = useState(false);
   const [validationError, setValidationError] = useState<unknown>();
-  const [version, setVersion] = useState<Definition["versions"][number] | null>(
-    null,
-  );
   const [raw, setRaw] = useState<string | null>(null);
   const canvas = useRef<CanvasAPI | null>(null);
-  const edit =
-    ["PROCESS_ANALYST", "ADMIN"].includes(user.role) &&
-    !version &&
-    !d?.archived;
+  const rawField = useRef<HTMLTextAreaElement>(null);
+  const focusRaw = useRef(false);
+  useEffect(() => {
+    if (raw !== null && focusRaw.current) {
+      rawField.current?.focus();
+      focusRaw.current = false;
+    }
+  }, [raw]);
+  const edit = ["PROCESS_ANALYST", "ADMIN"].includes(user.role) && !d?.archived;
   function changed() {
     epoch.current++;
     setDirty(true);
@@ -750,8 +898,13 @@ function Editor({
     }
   }
   useEffect(() => {
-    if (!dirty && !version && override === d?.draft) setOverride(null);
-  }, [dirty, version, override, d?.draft]);
+    if (!dirty && override === d?.draft) setOverride(null);
+  }, [dirty, override, d?.draft]);
+  const validationIssue =
+    validationError instanceof ApiError &&
+    typeof validationError.detail === "object"
+      ? validationError.detail
+      : undefined;
   if (!d)
     return (
       <>
@@ -761,36 +914,23 @@ function Editor({
     );
   return (
     <>
-      <a href="#registry">← Реестр</a>
+      <div className="path-line">
+        <a href={returnTo(route, "registry")}>← Реестр</a>
+        <span className="eyebrow">Моделирование</span>
+      </div>
       <Head
         title={d.name}
         sub={[
           d.code,
-          version
-            ? "Версия " + version.number
-            : edit
-              ? "Черновик · редакция " + d.revision
-              : null,
-          !version && d.current
-            ? "Опубликована версия " + d.current.number
-            : null,
+          edit ? "Черновик · редакция " + d.revision : null,
+          d.current ? "Опубликована версия " + d.current.number : null,
         ]
           .filter(Boolean)
           .join(" · ")}
       />
       <ErrorBox error={act.error ?? data.error} />
       <Panel title="Модель BPMN">
-        <div inert={act.busy && !validating}>
-          <Diagram
-            xml={override ?? d.draft}
-            edit={edit}
-            changed={changed}
-            ready={(value) => {
-              canvas.current = value;
-            }}
-          />
-        </div>
-        <div className="pad toolbar">
+        <div className="pad toolbar editor-actions">
           <button
             onClick={() =>
               void xml()
@@ -811,7 +951,7 @@ function Editor({
           </button>
           {edit && (
             <>
-              <label className="diagram-import">
+              <label className="diagram-import desktop-only">
                 <span>Импорт XML</span>
                 <input
                   type="file"
@@ -835,12 +975,13 @@ function Editor({
                 />
               </label>
               <button
+                className="desktop-only"
                 onClick={() => void xml().then(setRaw).catch(act.setError)}
               >
                 Править XML и конфигурацию
               </button>
               <button
-                className="primary"
+                className="primary desktop-only"
                 disabled={act.busy}
                 onClick={() => void saveDraft()}
               >
@@ -858,7 +999,7 @@ function Editor({
               Проверить модель
             </button>
           )}
-          {["PROCESS_MANAGER", "ADMIN"].includes(user.role) && !version && (
+          {["PROCESS_MANAGER", "ADMIN"].includes(user.role) && (
             <>
               <button
                 className="primary"
@@ -892,6 +1033,11 @@ function Editor({
               </button>
             </>
           )}
+          {d.current && (
+            <a href={linkTo("instances", { definition: d.id })}>
+              Экземпляры модели
+            </a>
+          )}
         </div>
         <div className="pad" role="status">
           {validating ? (
@@ -912,16 +1058,30 @@ function Editor({
             <p>Изменения проверены. Сохраните черновик перед публикацией.</p>
           )}
         </div>
-        {validationError instanceof ApiError &&
-        typeof validationError.detail === "object" ? (
+        {validationIssue ? (
           <div className="error pad" role="alert">
             <strong>Ошибка проверки модели</strong>
-            <p>
-              {validationError.detail.message ?? validationError.detail.code}
-            </p>
-            {validationError.detail.element && (
+            <p>{validationIssue.message ?? validationIssue.code}</p>
+            {validationIssue.element && (
               <p>
-                Элемент · <code>{validationError.detail.element}</code>
+                Элемент · <code>{validationIssue.element}</code>{" "}
+                <button
+                  onClick={() => {
+                    if (
+                      !canvas.current?.focusElement(
+                        validationIssue.element ?? "",
+                      )
+                    ) {
+                      if (rawField.current) rawField.current.focus();
+                      else {
+                        focusRaw.current = true;
+                        void xml().then(setRaw).catch(act.setError);
+                      }
+                    }
+                  }}
+                >
+                  К источнику ошибки
+                </button>
               </p>
             )}
             <p>Публикация заблокирована до успешной проверки.</p>
@@ -929,8 +1089,18 @@ function Editor({
         ) : (
           <ErrorBox error={validationError} />
         )}
+        <div inert={act.busy && !validating}>
+          <Diagram
+            xml={override ?? d.draft}
+            edit={edit}
+            changed={changed}
+            ready={(value) => {
+              canvas.current = value;
+            }}
+          />
+        </div>
       </Panel>
-      {raw !== null && edit && (
+      {raw !== null && (
         <Panel title="XML · формы, назначения, условия и таймеры">
           <div className="pad form wide">
             <p>
@@ -940,6 +1110,9 @@ function Editor({
             <label>
               Исходник BPMN
               <textarea
+                id="raw-xml"
+                ref={rawField}
+                readOnly={!edit}
                 rows={16}
                 value={raw}
                 disabled={act.busy}
@@ -949,16 +1122,18 @@ function Editor({
                 }}
               />
             </label>
-            <button
-              onClick={() => {
-                canvas.current = null;
-                setOverride(raw);
-                setRaw(null);
-                changed();
-              }}
-            >
-              Загрузить на холст
-            </button>
+            {edit && (
+              <button
+                onClick={() => {
+                  canvas.current = null;
+                  setOverride(raw);
+                  setRaw(null);
+                  changed();
+                }}
+              >
+                Загрузить на холст
+              </button>
+            )}
           </div>
         </Panel>
       )}
@@ -969,38 +1144,11 @@ function Editor({
             rows={d.versions.map((v) => [
               v.number,
               stamp(v.created_at),
-              <button
-                disabled={dirty}
-                onClick={() =>
-                  void act
-                    .call<{ xml: string }>(path + "/versions/" + v.id, "GET")
-                    .then((item) => {
-                      if (item) {
-                        canvas.current = null;
-                        setOverride(item.xml);
-                        setVersion(v);
-                        setValidation(undefined);
-                      }
-                    })
-                }
-              >
+              <a href={linkTo("registry/" + d.id + "/versions/" + v.id)}>
                 Открыть XML
-              </button>,
+              </a>,
             ])}
           />
-          {version && (
-            <div className="pad">
-              <button
-                onClick={() => {
-                  canvas.current = null;
-                  setVersion(null);
-                  setOverride(null);
-                }}
-              >
-                Вернуться в черновик
-              </button>
-            </div>
-          )}
         </Panel>
       )}
       {user.role === "EMPLOYEE" && d.input && (
@@ -1022,106 +1170,496 @@ function Editor({
     </>
   );
 }
-function Instances({ rev }: Props) {
-  const [filter, set] = useState("");
-  const [offset, setOffset] = useState(0);
-  const data = useData<Instance[]>(
-    instances + "?offset=" + offset + (filter ? "&status=" + filter : ""),
-    rev,
+function pageOffset(options: URLSearchParams) {
+  const n = Number(options.get("offset"));
+  return Number.isSafeInteger(n) && n > 0 && n <= 1_000_000 ? n : 0;
+}
+
+function Pagination({ route, count }: { route: string; count: number }) {
+  const options = routeOptions(route);
+  const offset = pageOffset(options);
+  function href(value: number) {
+    const next = new URLSearchParams(options);
+    if (value > 0) next.set("offset", String(value));
+    else next.delete("offset");
+    return "#" + route.split("?")[0] + (next.size ? "?" + next : "");
+  }
+  return (
+    <div role="navigation" className="toolbar pad" aria-label="Страницы">
+      {offset > 0 ? (
+        <a href={href(offset - 50)}>Назад</a>
+      ) : (
+        <span className="muted">Назад</span>
+      )}
+      <span>Страница {Math.floor(offset / 50) + 1}</span>
+      {count === 50 ? (
+        <a href={href(offset + 50)}>Далее</a>
+      ) : (
+        <span className="muted">Далее</span>
+      )}
+    </div>
   );
+}
+
+function Instances({ rev, route }: Props) {
+  const options = routeOptions(route);
+  const offset = pageOffset(options);
+  const filter = options.get("status") ?? "";
+  const term = options.get("q") ?? "";
+  const sort = options.get("order") ?? "";
+  const definition = options.get("definition");
+  const version = options.get("version");
+  const request = new URLSearchParams({ offset: String(offset) });
+  for (const [key, value] of Object.entries({
+    status: filter,
+    q: term,
+    order: sort,
+    definition,
+    version,
+  }))
+    if (value) request.set(key, value);
+  const data = useData<Instance[]>(instances + "?" + request, rev);
   return (
     <>
+      <p className="eyebrow">Исполнение</p>
       <Head
         title="Экземпляры процессов"
-        sub="Версии, состояние и сроки исполнения"
+        sub="Состояние, закреплённые версии и открытая работа"
       />
-      <ErrorBox error={data.error} />
       <Panel title="Список экземпляров">
-        <div className="pad toolbar">
+        <form
+          key={options.toString()}
+          className="pad toolbar"
+          onSubmit={(event) => {
+            const values = fields(event);
+            location.hash = linkTo("instances", {
+              definition,
+              version,
+              q: String(values.get("q")).trim(),
+              status: String(values.get("status")),
+              order: String(values.get("order")),
+            });
+          }}
+        >
+          <label>
+            Поиск
+            <input
+              name="q"
+              maxLength={100}
+              defaultValue={term}
+              placeholder="Имя, код или Instance ID"
+            />
+          </label>
           <label>
             Состояние
-            <select
-              value={filter}
-              onChange={(e) => {
-                set(e.target.value);
-                setOffset(0);
-              }}
-            >
+            <select name="status" defaultValue={filter}>
               <option value="">Все</option>
-              {["RUNNING", "COMPLETED", "INCIDENT"].map((v) => (
-                <option value={v} key={v}>
-                  {labels[v]}
+              {["RUNNING", "COMPLETED", "INCIDENT"].map((value) => (
+                <option key={value} value={value}>
+                  {labels[value]}
                 </option>
               ))}
             </select>
           </label>
-        </div>
-        <DataTable
-          columns={["Экземпляр", "Процесс", "Версия", "Состояние", "SLA"]}
-          rows={(data.data ?? []).map((i) => [
-            <a href={"#instances/" + i.id}>{short(i.id)}</a>,
-            i.name,
-            i.number,
-            <Status value={i.status} />,
-            stamp(i.due_at),
-          ])}
-        />
-        <div className="pad toolbar">
-          <button disabled={!offset} onClick={() => setOffset(offset - 50)}>
-            Назад
-          </button>
-          <button
-            disabled={(data.data?.length ?? 0) < 50}
-            onClick={() => setOffset(offset + 50)}
-          >
-            Далее
-          </button>
-        </div>
+          <label>
+            Порядок
+            <select name="order" defaultValue={sort}>
+              <option value="">Сначала новые</option>
+              <option value="oldest">Сначала старые</option>
+            </select>
+          </label>
+          <button>Найти</button>
+          {(definition || version || filter || sort || term) && (
+            <a href="#instances">Сбросить</a>
+          )}
+        </form>
+        {definition && (
+          <p className="pad muted">
+            Фильтр модели {short(definition)}
+            {version && " · версия " + short(version)}
+          </p>
+        )}
+        {data.error ? (
+          <ErrorBox error={data.error} />
+        ) : data.loading && !data.data ? (
+          <p className="pad" role="status">
+            Загрузка экземпляров…
+          </p>
+        ) : (
+          <DataTable
+            columns={[
+              "Экземпляр и процесс",
+              "Версия",
+              "Состояние",
+              "Запущен",
+              "Задачи",
+              "Инциденты",
+            ]}
+            rows={(data.data ?? []).map((item) => [
+              <>
+                <a
+                  href={linkTo("instances/" + item.id, { return: "#" + route })}
+                >
+                  {item.name}
+                </a>
+                <br />
+                <code title={item.id}>{short(item.id)}</code>
+              </>,
+              "v" + item.number,
+              <Status value={item.status} />,
+              stamp(item.created_at),
+              item.active_tasks ?? "—",
+              item.open_incidents ?? "—",
+            ])}
+          />
+        )}
+        {!data.error && (
+          <Pagination route={route} count={data.data?.length ?? 0} />
+        )}
       </Panel>
     </>
   );
 }
-function Monitor({ id, rev }: Props & { id: string }) {
+
+function PublishedVersion({
+  id,
+  version,
+  instance,
+  rev,
+  route,
+}: Props & { id?: string; version?: string; instance?: string }) {
+  const data = useData<{
+    id: string;
+    xml: string;
+    number: number;
+    created_at?: string;
+    name?: string;
+    version?: string;
+    definition?: string;
+  }>(
+    instance
+      ? instances + "/" + instance
+      : defs + "/" + id + "/versions/" + version,
+    rev,
+  );
+  const published = data.data;
+  if (!published)
+    return (
+      <>
+        <Head title="Опубликованная модель" />
+        {data.loading ? (
+          <p role="status">Загрузка точной версии…</p>
+        ) : (
+          <ErrorBox error={data.error} />
+        )}
+      </>
+    );
+  const pinned = instance ? published.version : published.id;
+  const back = routeOptions(route).get("return");
+  const instanceRoute = "#instances/" + instance;
+  const backToInstance = back?.startsWith(instanceRoute + "?")
+    ? back
+    : instanceRoute;
+  return (
+    <>
+      <div className="path-line">
+        <a href={instance ? backToInstance : "#registry/" + id}>
+          {instance ? "← К экземпляру" : "← К модели"}
+        </a>
+        <span className="eyebrow">Опубликованная версия</span>
+      </div>
+      <Head
+        title={published.name ?? "Опубликованная модель"}
+        sub={"Версия " + published.number + " · неизменяемый снимок BPMN"}
+      >
+        {(published.definition || id) && (
+          <a
+            href={linkTo("instances", {
+              definition: published.definition ?? id,
+              version: pinned,
+            })}
+          >
+            Экземпляры версии
+          </a>
+        )}
+      </Head>
+      <dl className="panel workspace-meta">
+        <div>
+          <dt>Version ID</dt>
+          <dd>
+            <code className="wrap-id">{pinned}</code>
+          </dd>
+        </div>
+        {published.created_at && !instance && (
+          <div>
+            <dt>Публикация</dt>
+            <dd>{stamp(published.created_at)}</dd>
+          </div>
+        )}
+        {instance && (
+          <div>
+            <dt>Instance ID</dt>
+            <dd>
+              <code className="wrap-id">{instance}</code>
+            </dd>
+          </div>
+        )}
+      </dl>
+      <Panel title="Версия BPMN">
+        <Diagram
+          xml={published.xml}
+          selectedId={routeOptions(route).get("node") ?? undefined}
+        />
+      </Panel>
+      <details className="panel">
+        <summary>Опубликованный BPMN XML</summary>
+        <pre>{published.xml}</pre>
+      </details>
+    </>
+  );
+}
+
+function deadline(
+  due: string,
+  observed: string | undefined,
+  completed?: string | null,
+) {
+  if (!(completed || observed)) return "Срок указан";
+  const ms = Date.parse(due) - Date.parse((completed || observed)!);
+  if (completed) return ms < 0 ? "Завершено после срока" : "Завершено в срок";
+  const minutes = Math.floor(Math.abs(ms) / 60000);
+  return (
+    (ms < 0 ? "Просрочено · " : "Осталось · ") +
+    (minutes < 1
+      ? "менее минуты"
+      : minutes >= 60
+        ? Math.floor(minutes / 60) + " ч " + (minutes % 60) + " мин"
+        : minutes + " мин")
+  );
+}
+
+function WaitingReason({
+  item,
+  select,
+}: {
+  item: Instance;
+  select: (id: string) => void;
+}) {
+  const unique = new Set<string>();
+  const joins = item.tokens.flatMap((token) => {
+    const frame = token.stack?.at(-1);
+    if (token.status !== "JOIN" || !frame || unique.has(frame.fork)) return [];
+    unique.add(frame.fork);
+    const forked = item.events.find(
+      (event) =>
+        event.action === "FORKED" &&
+        (event.detail as { fork?: string } | null)?.fork === frame.fork,
+    );
+    const branches = (forked?.detail as { branches?: string[] } | undefined)
+      ?.branches;
+    const peers = item.tokens.filter((candidate) =>
+      candidate.stack?.some((entry) => entry.fork === frame.fork),
+    );
+    const arrived = new Set(
+      peers
+        .filter(
+          (candidate) =>
+            candidate.status === "JOIN" &&
+            candidate.node === frame.join &&
+            candidate.stack.at(-1)?.fork === frame.fork,
+        )
+        .map((candidate) => candidate.stack.at(-1)?.branch),
+    );
+    const waiting = branches?.filter((branch) => !arrived.has(branch));
+    return [{ frame, waiting, arrived, peers }];
+  });
+  const pendingTimer = item.jobs.find(
+    (job) => job.kind === "TIMER" && job.status === "WAITING",
+  );
+  const blocked =
+    item.status === "INCIDENT"
+      ? [...item.events].reverse().find((event) => event.action === "INCIDENT")
+      : undefined;
+  const tasks = item.tasks.filter((task) => task.status !== "DONE");
+  return (
+    <section className="panel pad runtime-callout">
+      <h2>
+        {item.status === "COMPLETED"
+          ? "Исполнение завершено"
+          : item.status === "INCIDENT"
+            ? "Что блокирует исполнение?"
+            : "Почему процесс ожидает?"}
+      </h2>
+      {blocked?.node && (
+        <p>
+          Сервисный шаг заблокирован.{" "}
+          <button onClick={() => select(blocked.node!)}>
+            К элементу {blocked.node}
+          </button>
+        </p>
+      )}
+      {joins.map(({ frame, waiting, arrived, peers }) => (
+        <div key={frame.fork}>
+          <p>
+            <strong>
+              {frame.split} → {frame.join}
+            </strong>
+            {waiting
+              ? " · достигли шлюза " +
+                arrived.size +
+                " из " +
+                (arrived.size + waiting.length)
+              : " · ожидаются ветви"}
+          </p>
+          {waiting && (
+            <p>
+              Шлюз ожидает следующие входы ({waiting.length}) ·{" "}
+              <code>{waiting.join(", ")}</code>.
+            </p>
+          )}
+          <ul>
+            {peers
+              .filter((token) => token.status !== "JOIN")
+              .map((token) => (
+                <li key={token.id}>
+                  <button onClick={() => select(token.node)}>
+                    {tasks.find((task) => task.node === token.node)?.name ??
+                      token.node}
+                  </button>{" "}
+                  <Status value={token.status} />
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
+      {pendingTimer && (
+        <p>
+          Запланирован BPMN-таймер{" "}
+          <button onClick={() => select(pendingTimer.node)}>
+            {pendingTimer.node}
+          </button>{" "}
+          · {stamp(pendingTimer.due_at)}
+        </p>
+      )}
+      {tasks.length > 0 && joins.length === 0 && !blocked && (
+        <p>
+          Активные задачи · {tasks.length}. Движок продолжит маршрут после
+          завершения соответствующих шагов.
+        </p>
+      )}
+      {!blocked &&
+        !pendingTimer &&
+        !joins.length &&
+        !tasks.length &&
+        item.status === "RUNNING" && (
+          <p>Состояние уточняется по доступным токенам и событиям.</p>
+        )}
+      {item.status === "COMPLETED" && (
+        <p>
+          Завершено {stamp(item.completed_at)}. Бизнес-исход указан конечным
+          элементом в истории.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function Monitor({ id, rev, route, user }: Props & { id: string }) {
   const [tick, update] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => update((n) => n + 1), 1500);
-    return () => clearInterval(timer);
-  }, []);
+  const [selection, setSelection] = useState(
+    routeOptions(route).get("node") ?? "",
+  );
   const result = useData<Instance>(instances + "/" + id, rev + tick);
   const i = result.data;
+  const status = i?.status;
+  useEffect(() => {
+    if (!status || status === "COMPLETED") return;
+    const timer = setInterval(
+      () => {
+        if (document.visibilityState === "visible") update((n) => n + 1);
+      },
+      status === "INCIDENT" ? 4000 : 1500,
+    );
+    return () => clearInterval(timer);
+  }, [status]);
+  useEffect(() => {
+    setSelection(routeOptions(route).get("node") ?? "");
+  }, [route]);
+  const nodes = useMemo(() => (i?.xml ? modelNodes(i.xml) : []), [i?.xml]);
   if (!i)
     return (
       <>
         <ErrorBox error={result.error} />
-        {result.loading && <p>Загрузка экземпляра…</p>}
+        {result.loading && <p role="status">Загрузка экземпляра…</p>}
       </>
     );
+  const node = nodes.find((candidate) => candidate.id === selection);
+  const tasks = i.tasks.filter((task) => !selection || task.node === selection);
+  const staff = ["PROCESS_MANAGER", "ADMIN"].includes(user.role);
+  const pinned = linkTo("instances/" + i.id + "/model", {
+    node: selection,
+    return: "#" + route,
+  });
+  const relatedEvents = selection
+    ? i.events.filter((event) => event.node === selection)
+    : i.events;
   return (
     <>
-      <a href="#instances">← Экземпляры</a>
+      <div className="path-line">
+        <a href={returnTo(route, "instances")}>← Экземпляры</a>
+        <span className="eyebrow">Исполнение</span>
+      </div>
       <Head
         title={i.name}
-        sub={short(i.id) + " · опубликованная версия " + i.number}
+        sub={
+          "Экземпляр " + short(i.id) + " · опубликованная версия " + i.number
+        }
       >
-        <Status value={i.status} />
+        <div className="toolbar">
+          <Status value={i.status} />
+          <a href={pinned}>Открыть версию BPMN</a>
+        </div>
       </Head>
-      <div className="panel pad toolbar">
-        <span>Инициатор · {i.initiator}</span>
-        <span>Запуск · {stamp(i.created_at)}</span>
-        <span>SLA · {stamp(i.due_at)}</span>
-        {i.completed_at && (
-          <span>
-            Время исполнения ·{" "}
-            {Math.round(
-              (Date.parse(i.completed_at) - Date.parse(i.created_at)) / 1000,
-            )}{" "}
-            с
-          </span>
-        )}
+      <ErrorBox error={result.error} />
+      <div className="runtime-summary">
+        <WaitingReason item={i} select={setSelection} />
+        <section className="panel pad runtime-details">
+          <h2>Исполнение и сроки</h2>
+          <dl className="facts">
+            <div>
+              <dt>Инициатор</dt>
+              <dd>{i.initiator}</dd>
+            </div>
+            <div>
+              <dt>Запуск</dt>
+              <dd>{stamp(i.created_at)}</dd>
+            </div>
+            <div>
+              <dt>SLA экземпляра</dt>
+              <dd>
+                {stamp(i.due_at)}
+                <br />
+                {deadline(i.due_at, i.observed_at, i.completed_at)}
+              </dd>
+            </div>
+            <div>
+              <dt>Instance ID</dt>
+              <dd>
+                <code className="wrap-id">{i.id}</code>
+              </dd>
+            </div>
+          </dl>
+        </section>
       </div>
       <Panel title="Монитор исполнения">
+        <p className="pad muted">
+          Активные шаги отмечены синим, пройденные — зелёным, заблокированные —
+          красным. Текстовые состояния приведены ниже.
+        </p>
         <Diagram
           xml={i.xml}
+          selectedId={selection}
+          onSelect={setSelection}
           active={[...new Set(i.tokens.map((t) => t.node))].sort()}
           completed={[
             ...new Set(
@@ -1136,7 +1674,7 @@ function Monitor({ id, rev }: Props & { id: string }) {
                   ].includes(e.action),
                 )
                 .map((e) => e.node)
-                .filter((node): node is string => Boolean(node)),
+                .filter((id): id is string => Boolean(id)),
             ),
           ].sort()}
           blocked={
@@ -1148,42 +1686,95 @@ function Monitor({ id, rev }: Props & { id: string }) {
               : []
           }
         />
+        {selection && (
+          <div className="pad node-properties">
+            <h3>{node?.name ?? selection}</h3>
+            <p>
+              {node?.type ?? "Шаг исполнения"} · <code>{selection}</code>
+            </p>
+            <p>
+              {i.tokens
+                .filter((t) => t.node === selection)
+                .map((t) => labels[t.status] ?? t.status)
+                .join(" · ") || "Активных токенов на шаге нет"}
+            </p>
+            <a href={pinned}>Этот элемент в опубликованной версии</a>{" "}
+            <button onClick={() => setSelection("")}>Показать все шаги</button>
+          </div>
+        )}
       </Panel>
       <div className="split">
         <Panel title="Активные токены">
           <DataTable
             columns={["Узел", "Состояние"]}
-            rows={i.tokens.map((t) => [
-              <code>{t.node}</code>,
-              <Status value={t.status} />,
+            rows={i.tokens.map((token) => [
+              <button onClick={() => setSelection(token.node)}>
+                {token.node}
+              </button>,
+              <Status value={token.status} />,
             ])}
           />
         </Panel>
-        <Panel title="Работа в PostgreSQL">
+        <Panel title="Запланированные работы">
           <DataTable
-            columns={["Тип", "Состояние", "Срок", "Попытки"]}
-            rows={i.jobs.map((j) => [
-              j.kind,
-              j.status,
-              stamp(j.due_at),
-              j.attempts,
+            columns={[
+              "Тип",
+              "Узел",
+              "Состояние",
+              "Запланировано",
+              "Сработало",
+              "Попытки",
+            ]}
+            rows={i.jobs.map((job) => [
+              job.kind === "TIMER" ? "BPMN-таймер" : "Сервис",
+              <button onClick={() => setSelection(job.node)}>
+                {job.node}
+              </button>,
+              <Status value={job.status} />,
+              stamp(job.due_at),
+              stamp(job.finished_at),
+              job.attempts,
             ])}
           />
         </Panel>
       </div>
-      <Panel title="Задачи процесса">
+      <Panel title={selection ? "Задачи выбранного шага" : "Задачи процесса"}>
         <DataTable
-          columns={["Задача", "Группа", "Срок", "Состояние"]}
-          rows={i.tasks.map((t) => [
-            t.name,
-            t.work_group,
-            stamp(t.due_at),
-            <Status value={t.status} />,
+          columns={["Задача", "Группа", "Срок задачи", "Состояние"]}
+          rows={tasks.map((task) => [
+            <>
+              {staff ||
+              !user.groups.includes(task.work_group) ||
+              (task.work_group === "employees" && i.owner !== user.id) ||
+              (task.assignee && task.assignee !== user.id) ? (
+                task.name
+              ) : (
+                <a href={linkTo("tasks/" + task.id, { return: "#" + route })}>
+                  {task.name}
+                </a>
+              )}
+              {task.escalated && (
+                <>
+                  <br />
+                  <span className="status amber">Нарушен SLA</span>
+                </>
+              )}
+            </>,
+            task.work_group,
+            stamp(task.due_at),
+            <Status value={task.status} />,
           ])}
         />
       </Panel>
-      <Panel title="Хронология">
-        <EventTable events={i.events} />
+      {staff && i.events.some((event) => event.action === "INCIDENT") && (
+        <p className="path-line">
+          <a href={linkTo("incidents", { instance: i.id })}>
+            Инциденты этого экземпляра
+          </a>
+        </p>
+      )}
+      <Panel title={selection ? "Хронология выбранного шага" : "Хронология"}>
+        <EventTable events={relatedEvents} select={setSelection} />
         <details>
           <summary>Данные экземпляра</summary>
           <Json data={i.vars} />
@@ -1192,10 +1783,11 @@ function Monitor({ id, rev }: Props & { id: string }) {
     </>
   );
 }
-function Inbox({ rev }: Props) {
-  const [filter, set] = useState("");
-  const [offset, setOffset] = useState(0);
-  const data = useData<Task[]>("/tasks?offset=" + offset + filter, rev);
+function Inbox({ rev, route }: Props) {
+  const options = routeOptions(route);
+  const query = new URLSearchParams(options);
+  query.set("offset", String(pageOffset(options)));
+  const data = useData<Task[]>("/tasks?" + query, rev);
   return (
     <>
       <Head
@@ -1206,23 +1798,26 @@ function Inbox({ rev }: Props) {
       <Panel title="Задачи">
         <form
           className="pad toolbar"
+          key={options.toString()}
           onSubmit={(e) => {
-            const v = fields(e);
-            set(
-              "&q=" +
-                encodeURIComponent(String(v.get("q"))) +
-                (v.get("status") ? "&status=" + v.get("status") : ""),
-            );
-            setOffset(0);
+            const values = fields(e);
+            location.hash = linkTo("tasks", {
+              q: String(values.get("q")).trim(),
+              status: String(values.get("status")),
+            });
           }}
         >
           <label>
             Поиск
-            <input name="q" />
+            <input
+              name="q"
+              maxLength={100}
+              defaultValue={options.get("q") ?? ""}
+            />
           </label>
           <label>
             Статус
-            <select name="status">
+            <select name="status" defaultValue={options.get("status") ?? ""}>
               <option value="">Активные</option>
               {["OPEN", "CLAIMED", "DONE"].map((s) => (
                 <option value={s} key={s}>
@@ -1238,35 +1833,29 @@ function Inbox({ rev }: Props) {
             "Задача",
             "Процесс",
             "Группа",
+            "Назначение",
             "Приоритет",
             "Срок",
             "Состояние",
           ]}
           rows={(data.data ?? []).map((t) => [
-            <a href={"#tasks/" + t.id}>{t.name}</a>,
+            <a href={linkTo("tasks/" + t.id, { return: "#" + route })}>
+              {t.name}
+            </a>,
             t.process,
             t.work_group,
+            t.assignee_name ?? "Не назначена",
             t.priority,
             stamp(t.due_at) + (t.escalated ? " · просрочена" : ""),
             <Status value={t.status} />,
           ])}
         />
-        <div className="pad toolbar">
-          <button disabled={!offset} onClick={() => setOffset(offset - 50)}>
-            Назад
-          </button>
-          <button
-            disabled={(data.data?.length ?? 0) < 50}
-            onClick={() => setOffset(offset + 50)}
-          >
-            Далее
-          </button>
-        </div>
+        <Pagination route={route} count={data.data?.length ?? 0} />
       </Panel>
     </>
   );
 }
-function TaskView({ id, rev, refresh }: Props & { id: string }) {
+function TaskView({ id, rev, refresh, route }: Props & { id: string }) {
   const data = useData<Task>("/tasks/" + id, rev);
   const t = data.data;
   const act = useAction(refresh);
@@ -1279,11 +1868,77 @@ function TaskView({ id, rev, refresh }: Props & { id: string }) {
     );
   return (
     <>
-      <a href="#tasks">← Задачи</a>
-      <Head title={t.name} sub={t.work_group + " · срок " + stamp(t.due_at)}>
+      <div className="path-line">
+        <a href={returnTo(route, "tasks")}>← Задачи</a>
+        <span className="eyebrow">Исполнение</span>
+      </div>
+      <Head
+        title={t.name}
+        sub={
+          (t.process ?? "Процесс") +
+          (t.number ? " · опубликованная версия " + t.number : "")
+        }
+      >
         <Status value={t.status} />
       </Head>
-      <ErrorBox error={act.error} />
+      <Panel title="Контекст задачи">
+        <div className="pad">
+          <dl className="facts">
+            <div>
+              <dt>Приоритет</dt>
+              <dd>{t.priority}</dd>
+            </div>
+            <div>
+              <dt>Назначена</dt>
+              <dd>
+                {t.assignee_name ?? "Не назначена"} · {t.work_group}
+              </dd>
+            </div>
+            <div>
+              <dt>BPMN-шаг</dt>
+              <dd>
+                <a href={linkTo("instances/" + t.instance, { node: t.node })}>
+                  {t.node}
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>Начало SLA задачи</dt>
+              <dd>{stamp(t.started_at)}</dd>
+            </div>
+            <div>
+              <dt>Срок задачи</dt>
+              <dd>
+                {stamp(t.due_at)} ·{" "}
+                {deadline(t.due_at, t.observed_at, t.completed_at)}
+                {t.escalated && <strong> · Нарушен SLA</strong>}
+              </dd>
+            </div>
+            <div>
+              <dt>Task ID</dt>
+              <dd>
+                <code className="wrap-id">{id}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Instance ID</dt>
+              <dd>
+                <code className="wrap-id">{t.instance}</code>
+              </dd>
+            </div>
+          </dl>
+          {t.input != null && (
+            <details>
+              <summary>Входные данные процесса</summary>
+              <Json data={t.input} />
+            </details>
+          )}
+        </div>
+      </Panel>
+      <ErrorBox error={data.error ?? act.error} />
+      {act.error instanceof ApiError && act.error.status === 409 && (
+        <button onClick={refresh}>Обновить состояние задачи</button>
+      )}
       <Panel title="Выполнение">
         {t.status === "OPEN" ? (
           <div className="pad">
@@ -1317,26 +1972,67 @@ function TaskView({ id, rev, refresh }: Props & { id: string }) {
             }
           />
         ) : (
-          <p className="pad">Результат сохранён.</p>
+          <div className="pad">
+            <p role="status">Результат сохранён.</p>
+            <p>Подтверждено {stamp(t.completed_at)}</p>
+            {t.submission != null && (
+              <details>
+                <summary>Результат отправки</summary>
+                <Json data={t.submission} />
+              </details>
+            )}
+          </div>
         )}
         <div className="pad">
-          <a href={"#instances/" + t.instance}>Открыть данные процесса</a>
+          <a href={linkTo("instances/" + t.instance, { node: t.node })}>
+            Открыть данные процесса
+          </a>
         </div>
       </Panel>
     </>
   );
 }
-function EventTable({ events }: { events: Event[] }) {
+function EventTable({
+  events,
+  select,
+}: {
+  events: Event[];
+  select?: (id: string) => void;
+}) {
   return (
     <DataTable
       columns={["Событие", "Узел", "Время", "Запрос", "Данные"]}
       rows={events.map((e) => [
         e.action,
-        e.node ?? "—",
+        e.node && select ? (
+          <button onClick={() => select(e.node!)}>{e.node}</button>
+        ) : e.instance ? (
+          <a href={linkTo("instances/" + e.instance, { node: e.node })}>
+            {e.node ?? "Экземпляр"}
+          </a>
+        ) : (
+          (e.node ?? "—")
+        ),
         stamp(e.created_at),
         <code title={e.request}>{short(e.request)}</code>,
         <details>
           <summary>Подробнее</summary>
+          <dl className="facts">
+            <div>
+              <dt>Request ID</dt>
+              <dd>
+                <code className="wrap-id">{e.request}</code>
+              </dd>
+            </div>
+            {e.actor && (
+              <div>
+                <dt>Actor ID</dt>
+                <dd>
+                  <code className="wrap-id">{e.actor}</code>
+                </dd>
+              </div>
+            )}
+          </dl>
           <Json data={e.detail} />
         </details>,
       ])}
@@ -1369,10 +2065,28 @@ function Audit({ rev }: { rev: number }) {
 }
 function ReportTable({ data }: { data: Row[] }) {
   const keys = Object.keys(data[0] ?? {});
+  const labels: Record<string, string> = {
+    status: "Состояние",
+    count: "Количество",
+    breached: "Просрочено",
+    work_group: "Группа",
+    group: "Группа",
+    version: "Версия",
+    name: "Процесс",
+    process_name: "Процесс",
+  };
   return (
     <DataTable
-      columns={keys}
-      rows={data.map((row) => keys.map((k) => String(row[k])))}
+      columns={keys.map((key) => labels[key] ?? key)}
+      rows={data.map((row) =>
+        keys.map((key) =>
+          key === "status" ? (
+            <Status value={String(row[key])} />
+          ) : (
+            String(row[key] ?? "—")
+          ),
+        ),
+      )}
     />
   );
 }
@@ -1452,7 +2166,7 @@ function Reports({ rev }: { rev: number }) {
     <>
       <Head
         title="Операционные отчёты"
-        sub="Объёмы и нарушения SLA по данным исполнения"
+        sub="Сроки экземпляров и задач по данным исполнения · время в UTC"
       />
       <ErrorBox error={r.error} />
       <Panel title="Экземпляры по версии">
@@ -1464,57 +2178,259 @@ function Reports({ rev }: { rev: number }) {
     </>
   );
 }
-function Incidents({ rev, refresh, user }: Props) {
-  const r = useData<
-    {
-      id: string;
-      instance: string;
-      code: string;
-      opened: string;
-      resolved: string | null;
-      note: string | null;
-    }[]
-  >("/incidents", rev);
+type Incident = {
+  id: string;
+  instance: string;
+  node: string;
+  number: number;
+  process: string;
+  version: string;
+  code: string;
+  opened: string;
+  resolved: string | null;
+  recovered_at: string | null;
+  recovery: string;
+  attempts: number;
+  due_at: string;
+  note: string | null;
+  next_incident: string | null;
+  job: string;
+  previous_resolved: string | null;
+  next_opened: string | null;
+};
+
+function Incidents({ rev, refresh, user, route, id }: Props & { id?: string }) {
+  const instance = routeOptions(route).get("instance");
+  const query = new URLSearchParams();
+  if (id) query.set("id", id);
+  if (instance) query.set("instance", instance);
+  const [tick, setTick] = useState(0);
+  const result = useData<Incident[]>("/incidents?" + query, rev + tick);
+  const current = id ? result.data?.[0] : undefined;
+  const execution = useData<Instance>(
+    current ? instances + "/" + current.instance : "",
+    rev + tick,
+  );
   const act = useAction(refresh);
+  const needsPolling = Boolean(
+    result.data?.some((item) =>
+      ["QUEUED", "RETRY_WAITING"].includes(item.recovery),
+    ),
+  );
+  useEffect(() => {
+    if (!needsPolling) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") setTick((tick) => tick + 1);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [needsPolling]);
+  function explanation(item: Incident) {
+    if (item.recovery === "OPEN")
+      return "Сервисное задание заблокировано. Устраните причину и запланируйте повтор.";
+    if (item.recovery === "RECOVERED")
+      return "Сервисное задание завершилось. Проверьте следующий шаг экземпляра.";
+    if (item.recovery === "FAILED")
+      return "Повтор вновь заблокировал задание. Откройте связанный инцидент.";
+    if (item.recovery === "UNKNOWN")
+      return "Доступная история задания не подтверждает результат. Проверьте экземпляр и связанные события.";
+    return "Команда принята. Результат станет известен после обработки задания.";
+  }
   return (
     <>
+      <div className="path-line">
+        {id && <a href={linkTo("incidents", { instance })}>← Инциденты</a>}
+        <span className="eyebrow">Исполнение</span>
+      </div>
       <Head
-        title="Инциденты исполнения"
-        sub="Причина блокировки и контролируемый повтор"
-      />
-      <ErrorBox error={act.error ?? r.error} />
-      <Panel title="Журнал инцидентов">
-        <DataTable
-          columns={["Сбой", "Экземпляр", "Возник", "Устранён", "Действие"]}
-          rows={(r.data ?? []).map((i) => [
-            i.code,
-            <a href={"#instances/" + i.instance}>{short(i.instance)}</a>,
-            stamp(i.opened),
-            i.resolved ? stamp(i.resolved) : "Открыт",
-            !i.resolved && user.role === "ADMIN" ? (
-              <form
-                className="toolbar"
-                onSubmit={(e) =>
-                  void act.call(
-                    "/incidents/" + i.id + "/retry",
-                    "POST",
-                    Object.fromEntries(fields(e)),
-                    true,
-                  )
-                }
+        title={current ? "Инцидент · " + current.code : "Инциденты исполнения"}
+        sub={
+          current
+            ? current.process + " · опубликованная версия " + current.number
+            : "Диагностика блокировок и подтверждение результата повтора"
+        }
+      >
+        {current && (
+          <Status
+            value={current.recovery === "OPEN" ? "INCIDENT" : current.recovery}
+          />
+        )}
+      </Head>
+      <ErrorBox error={act.error ?? result.error} />
+      {current ? (
+        <>
+          <section className="panel pad runtime-callout">
+            <h2>Состояние восстановления</h2>
+            <p>{explanation(current)}</p>
+            {current.next_incident && (
+              <a href={"#incidents/" + current.next_incident}>
+                Открыть следующий инцидент
+              </a>
+            )}
+          </section>
+          <Panel title="Детали инцидента">
+            <div className="pad">
+              <dl className="facts">
+                <div>
+                  <dt>Причина</dt>
+                  <dd>
+                    {current.code === "GUARD_UNAVAILABLE"
+                      ? "Сервисная проверка недоступна"
+                      : current.code}
+                  </dd>
+                </div>
+                <div>
+                  <dt>BPMN-элемент</dt>
+                  <dd>
+                    <a
+                      href={linkTo("instances/" + current.instance, {
+                        node: current.node,
+                      })}
+                    >
+                      {current.node} · Монитор
+                    </a>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Возник</dt>
+                  <dd>{stamp(current.opened)}</dd>
+                </div>
+                <div>
+                  <dt>Повтор запрошен</dt>
+                  <dd>{stamp(current.resolved)}</dd>
+                </div>
+                <div>
+                  <dt>Плановая попытка</dt>
+                  <dd>
+                    {["QUEUED", "RETRY_WAITING"].includes(current.recovery)
+                      ? stamp(current.due_at)
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Подтверждение</dt>
+                  <dd>{stamp(current.recovered_at)}</dd>
+                </div>
+                <div>
+                  <dt>Incident ID</dt>
+                  <dd>
+                    <code className="wrap-id">{current.id}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Instance ID</dt>
+                  <dd>
+                    <code className="wrap-id">{current.instance}</code>
+                  </dd>
+                </div>
+              </dl>
+              {current.note && (
+                <p className="notice">Основание · {current.note}</p>
+              )}
+              {user.role === "ADMIN" && current.recovery === "OPEN" && (
+                <form
+                  className="toolbar"
+                  onSubmit={(e) => {
+                    void act.call(
+                      "/incidents/" + current.id + "/retry",
+                      "POST",
+                      Object.fromEntries(fields(e)),
+                      true,
+                    );
+                  }}
+                >
+                  <label>
+                    Основание для повтора
+                    <input name="note" required minLength={4} maxLength={240} />
+                  </label>
+                  <button className="primary" disabled={act.busy}>
+                    Поставить повтор в очередь
+                  </button>
+                </form>
+              )}
+              {current.recovery !== "OPEN" && (
+                <a
+                  href={linkTo("instances/" + current.instance + "/model", {
+                    node: current.node,
+                  })}
+                >
+                  Версия BPMN и проблемный шаг
+                </a>
+              )}
+            </div>
+          </Panel>
+          <Panel title="История восстановления">
+            <EventTable
+              events={(execution.data?.events ?? []).filter((event) => {
+                const detail = event.detail as {
+                  incident?: string;
+                  job?: string;
+                } | null;
+                if (event.action === "MANUAL_RETRY")
+                  return detail?.incident === current.id;
+                if (
+                  !["INCIDENT", "SERVICE_RETRY", "SERVICE_DONE"].includes(
+                    event.action,
+                  ) ||
+                  event.node !== current.node
+                )
+                  return false;
+                if (
+                  current.next_opened &&
+                  Date.parse(event.created_at) >=
+                    Date.parse(current.next_opened)
+                )
+                  return false;
+                if (!detail?.job)
+                  return (
+                    Date.parse(event.created_at) >= Date.parse(current.opened)
+                  );
+                return (
+                  detail.job === current.job &&
+                  (!current.previous_resolved ||
+                    Date.parse(event.created_at) >=
+                      Date.parse(current.previous_resolved))
+                );
+              })}
+            />
+          </Panel>
+        </>
+      ) : result.loading && !result.data ? (
+        <p role="status">Загрузка инцидентов…</p>
+      ) : (
+        <Panel title="Журнал инцидентов">
+          {instance && (
+            <p className="pad">
+              <a href={"#instances/" + instance}>К экземпляру</a> ·{" "}
+              <a href="#incidents">Все инциденты</a>
+            </p>
+          )}
+          <DataTable
+            columns={["Сбой", "Экземпляр", "Возник", "Восстановление"]}
+            rows={(result.data ?? []).map((item) => [
+              <>
+                <a href={linkTo("incidents/" + item.id, { instance })}>
+                  {item.code}
+                </a>
+                <br />
+                <span className="muted">
+                  {item.node} · v{item.number}
+                </span>
+              </>,
+              <a
+                href={linkTo("instances/" + item.instance, { node: item.node })}
               >
-                <label>
-                  Основание
-                  <input name="note" minLength={4} required />
-                </label>
-                <button disabled={act.busy}>Повторить</button>
-              </form>
-            ) : (
-              i.note
-            ),
-          ])}
-        />
-      </Panel>
+                {item.process} · {short(item.instance)}
+              </a>,
+              stamp(item.opened),
+              item.recovery === "OPEN" ? (
+                <Status value="INCIDENT" />
+              ) : (
+                <Status value={item.recovery} />
+              ),
+            ])}
+          />
+        </Panel>
+      )}
     </>
   );
 }
@@ -1674,17 +2590,41 @@ function Lab({ refresh }: Props) {
                 <a href={"#instances/" + result.instance}>Открыть экземпляр</a>
               )}
             </div>
-            <ReportTable
-              data={Object.entries(result.checks).map(([name, ok]) => ({
-                name,
-                ok,
-              }))}
+            <DataTable
+              columns={["Проверка движка", "Код", "Результат"]}
+              rows={Object.entries(result.checks).map(([name, ok]) => [
+                (
+                  {
+                    two_branches: "Созданы две отдельные ветви",
+                    join_waits: "Шлюз ожидал вторую ветвь",
+                    single_join: "Шлюз продолжил исполнение один раз",
+                    timer_fired: "Отложенный шаг сработал",
+                    completed: "Процесс завершился",
+                    escalated: "Нарушение SLA зарегистрировано",
+                    blocked: "Ошибка заблокировала исполнение",
+                    resumed: "Сервисный шаг завершился после повтора",
+                    pinned_version: "Экземпляры сохранили закреплённые версии",
+                    replayed: "Прежняя квитанция возвращена",
+                    single_completion: "Задача выполнена один раз",
+                    model_rejected: "Компилятор обнаружил ошибку",
+                    scope_denied: "Команда вне области отклонена",
+                    two_commits: "Обе команды завершились",
+                    new_task: "Создана новая задача согласования",
+                    rejected_route: "Достигнут исход отклонения",
+                  } as Record<string, string>
+                )[name] ?? name,
+                <code>{name}</code>,
+                ok ? "Подтверждено" : "Расхождение",
+              ])}
             />
             <EventTable events={result.events} />
           </Panel>
           <Panel title="HTTP-запросы и ответы">
             <div className="pad">
-              <Json data={result.traffic} />
+              <details>
+                <summary>Открыть HTTP-трассу</summary>
+                <Json data={result.traffic} />
+              </details>
             </div>
           </Panel>
         </>

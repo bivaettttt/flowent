@@ -116,16 +116,26 @@ def definitions(
     q: Annotated[str, Query(max_length=100)] = "",
     offset: Annotated[int, Query(ge=0)] = 0,
     archived: bool = False,
+    order: Literal["code", "name", "updated"] = "code",
 ):
     staff = actor["role"] in (*AUTHOR, *MANAGE)
     with db.connect() as conn:
         return many(
             conn,
-            """SELECT d.id,d.code,d.name,d.owner,d.revision,d.archived,d.active_version,v.number
+            """SELECT d.id,d.code,d.name,d.owner,d.revision,d.archived,d.active_version,v.number,
+                         COALESCE(change.created_at,v.created_at) AS updated_at
                          FROM definitions d LEFT JOIN versions v ON v.id=d.active_version
+                         LEFT JOIN LATERAL (
+                           SELECT e.created_at FROM events e WHERE e.instance IS NULL
+                             AND e.action IN ('DEFINITION_CREATED','DRAFT_UPDATED','ARCHIVE_CHANGED','PUBLISHED')
+                             AND e.detail->>'definition'=d.id::text ORDER BY e.id DESC LIMIT 1
+                         ) change ON true
                          WHERE (d.name ILIKE :pattern OR d.code ILIKE :pattern) AND
                          ((:staff AND d.archived=:archived) OR (NOT :staff AND NOT d.archived AND v.id IS NOT NULL))
-                         ORDER BY d.code LIMIT 50 OFFSET :offset""",
+                         ORDER BY CASE WHEN :sort='name' THEN d.name END,
+                           CASE WHEN :sort='updated' THEN COALESCE(change.created_at,v.created_at) END DESC NULLS LAST,
+                           d.code LIMIT 50 OFFSET :offset""",
+            sort=order,
             staff=staff,
             archived=archived,
             pattern=f"%{q}%",
@@ -195,7 +205,7 @@ def version_detail(id: UUID, version: UUID, actor: Actor):
     with db.connect() as conn:
         value = one(
             conn,
-            "SELECT * FROM versions WHERE definition=:i AND id=:v",
+            "SELECT v.*,d.name FROM versions v JOIN definitions d ON d.id=v.definition WHERE v.definition=:i AND v.id=:v",
             i=id,
             v=version,
         )
@@ -297,17 +307,32 @@ def instances(
     actor: Actor,
     status: Literal["RUNNING", "INCIDENT", "COMPLETED"] | None = None,
     offset: Annotated[int, Query(ge=0)] = 0,
+    definition: UUID | None = None,
+    version: UUID | None = None,
+    q: Annotated[str, Query(max_length=100)] = "",
+    order: Literal["newest", "oldest"] = "newest",
 ):
     with db.connect() as conn:
         return many(
             conn,
-            """SELECT i.*,d.name,v.number FROM instances i JOIN versions v ON v.id=i.version
-                         JOIN definitions d ON d.id=v.definition WHERE (:staff OR i.owner=:u)
-                         AND (CAST(:status AS text) IS NULL OR i.status=:status)
-                         ORDER BY i.created_at DESC,i.id DESC LIMIT 50 OFFSET :offset""",
+            """SELECT i.*,d.name,v.number,v.definition,
+                     (SELECT count(*) FROM tasks t WHERE t.instance=i.id AND t.status<>'DONE') AS active_tasks,
+                     (SELECT count(*) FROM incidents r WHERE r.instance=i.id AND r.resolved IS NULL) AS open_incidents
+                 FROM instances i JOIN versions v ON v.id=i.version
+                 JOIN definitions d ON d.id=v.definition WHERE (:staff OR i.owner=:u)
+                 AND (CAST(:status AS text) IS NULL OR i.status=:status)
+                 AND (CAST(:definition AS uuid) IS NULL OR v.definition=:definition)
+                 AND (CAST(:version AS uuid) IS NULL OR i.version=:version)
+                 AND (d.name ILIKE :q OR d.code ILIKE :q OR i.id::text ILIKE :q)
+                 ORDER BY CASE WHEN :oldest THEN i.created_at END ASC,
+                   i.created_at DESC,i.id DESC LIMIT 50 OFFSET :offset""",
             staff=actor["role"] in MANAGE,
             u=actor["id"],
             status=status,
+            definition=definition,
+            version=version,
+            q=f"%{q}%",
+            oldest=order == "oldest",
             offset=offset,
         )
 
@@ -329,8 +354,10 @@ def inbox(
     with db.connect() as conn:
         return many(
             conn,
-            """SELECT t.*,d.name AS process FROM tasks t JOIN instances i ON i.id=t.instance
+            """SELECT t.*,d.name AS process,i.version,v.number,u.name AS assignee_name
+                         FROM tasks t JOIN instances i ON i.id=t.instance
                          JOIN versions v ON v.id=i.version JOIN definitions d ON d.id=v.definition
+                         LEFT JOIN users u ON u.id=t.assignee
                          WHERE work_group=ANY(:groups) AND (work_group<>'employees' OR i.owner=:u)
                          AND (assignee IS NULL OR assignee=:u) AND t.name ILIKE :q
                          AND ((CAST(:s AS text) IS NULL AND t.status<>'DONE') OR t.status=:s)
@@ -346,13 +373,22 @@ def inbox(
 @app.get("/api/tasks/{id}")
 def task(id: UUID, actor: Actor):
     with db.connect() as conn:
-        item = one(conn, "SELECT * FROM tasks WHERE id=:i", i=id)
-        if not item:
+        item = one(
+            conn,
+            """SELECT t.*,i.owner,d.name AS process,i.version,v.number,v.definition,
+                      i.vars->'input' AS input,u.name AS assignee_name,
+                      (SELECT e.created_at FROM events e WHERE e.instance=i.id AND e.action='ENTERED'
+                         AND e.detail->>'token'=t.token::text ORDER BY e.id LIMIT 1) AS started_at
+                 FROM tasks t JOIN instances i ON i.id=t.instance
+                 JOIN versions v ON v.id=i.version JOIN definitions d ON d.id=v.definition
+                 LEFT JOIN users u ON u.id=t.assignee WHERE t.id=:i""",
+            i=id,
+        )
+        if not item or not task_access(item, item, actor):
             raise HTTPException(404, "TASK_NOT_FOUND")
-        owner = one(conn, "SELECT owner FROM instances WHERE id=:i", i=item["instance"])
-        if not task_access(item, owner, actor):
-            raise HTTPException(404, "TASK_NOT_FOUND")
-        return item
+        return {key: value for key, value in item.items() if key != "owner"} | {
+            "observed_at": now(conn)
+        }
 
 
 @app.post("/api/tasks/{id}/{action}")
@@ -378,10 +414,41 @@ def perform(
 
 
 @app.get("/api/incidents")
-def incidents(actor: Actor):
+def incidents(actor: Actor, id: UUID | None = None, instance: UUID | None = None):
     role(actor, *MANAGE)
     with db.connect() as conn:
-        return many(conn, "SELECT * FROM incidents ORDER BY opened DESC LIMIT 100")
+        return many(
+            conn,
+            """SELECT fault.*,t.node,i.version,v.number,d.name AS process,
+                      j.attempts,j.due_at,next.id AS next_incident,next.opened AS next_opened,
+                      previous.resolved AS previous_resolved,outcome.created_at AS recovered_at,
+                      CASE WHEN fault.resolved IS NULL THEN 'OPEN'
+                           WHEN next.id IS NOT NULL THEN 'FAILED'
+                           WHEN j.status='DONE' THEN 'RECOVERED'
+                           WHEN j.status='WAITING' AND j.attempts>0 THEN 'RETRY_WAITING'
+                           WHEN j.status='WAITING' THEN 'QUEUED'
+                           ELSE 'UNKNOWN' END AS recovery
+                 FROM incidents fault JOIN jobs j ON j.id=fault.job
+                 JOIN tokens t ON t.id=j.token JOIN instances i ON i.id=fault.instance
+                 JOIN versions v ON v.id=i.version JOIN definitions d ON d.id=v.definition
+                 LEFT JOIN LATERAL (
+                   SELECT later.id,later.opened FROM incidents later WHERE later.job=fault.job AND later.id<>fault.id
+                       AND later.opened>=fault.resolved ORDER BY later.opened,later.id LIMIT 1
+                 ) next ON true
+                 LEFT JOIN LATERAL (
+                   SELECT max(earlier.resolved) AS resolved FROM incidents earlier
+                     WHERE earlier.job=fault.job AND earlier.id<>fault.id AND earlier.opened<fault.opened
+                 ) previous ON true
+                 LEFT JOIN LATERAL (
+                   SELECT e.created_at FROM events e WHERE e.instance=fault.instance AND e.action='SERVICE_DONE'
+                       AND e.detail->>'job'=j.id::text AND e.created_at>=fault.resolved ORDER BY e.id LIMIT 1
+                 ) outcome ON true
+                 WHERE (CAST(:id AS uuid) IS NULL OR fault.id=:id)
+                     AND (CAST(:instance AS uuid) IS NULL OR fault.instance=:instance)
+                 ORDER BY fault.opened DESC,fault.id DESC LIMIT 100""",
+            id=id,
+            instance=instance,
+        )
 
 
 @app.post("/api/incidents/{id}/retry")

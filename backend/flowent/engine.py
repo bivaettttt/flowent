@@ -337,6 +337,7 @@ def process_job(conn, item, job, instant):
             "INCIDENT" if blocked else "SERVICE_RETRY",
             row["node"],
             attempt=count,
+            job=job["id"],
         )
         return
     sql(
@@ -354,6 +355,7 @@ def process_job(conn, item, job, instant):
         row["node"],
         attempt=count,
         action_config=action,
+        job=job["id"],
     )
     if action and action["type"] == "notify":
         history(

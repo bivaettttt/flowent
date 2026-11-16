@@ -10,6 +10,10 @@ An analyst imports or edits BPMN in bpmn-js. Publication compiles that XML to a 
 - [IT Access Request](processes/access.bpmn)
 - [Business Travel Approval](processes/travel.bpmn)
 
+The Workbench associates a successful check with the SHA-256 of the exact XML. On publication the API locks the definition, verifies the submitted revision and digest when supplied, and compiles the same persisted draft in that transaction. Legacy callers that submit only the revision still receive the locked compilation. The runtime model screen uses the instance's existing data-access check and the pinned XML returned by that endpoint.
+
+The incident API distinguishes pending work, confirmed completion and a subsequent incident. It reads the existing job and its event history. New service events carry the job ID, so a retry and its eventual outcome can be grouped without inferring success from queue acceptance.
+
 ## Execution and durable work
 
 | Construct | Behavior |

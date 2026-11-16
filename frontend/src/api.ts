@@ -62,6 +62,7 @@ export type Field = {
 };
 export type Form = { properties: Record<string, Field>; required?: string[] };
 export type User = {
+  id: string;
   name: string;
   role: string;
   lab: boolean;
@@ -75,6 +76,7 @@ export type Definition = {
   number?: number;
   draft: string;
   active_version: string | null;
+  updated_at?: string | null;
   current?: { number: number } | null;
   archived: boolean;
   input: Form | null;
@@ -86,6 +88,15 @@ export type Task = {
   node: string;
   name: string;
   process?: string;
+  number?: number;
+  version?: string;
+  definition?: string;
+  assignee_name?: string | null;
+  input?: unknown;
+  started_at?: string | null;
+  observed_at?: string;
+  completed_at?: string | null;
+  submission?: unknown;
   status: string;
   work_group: string;
   assignee: string | null;
@@ -97,6 +108,8 @@ export type Task = {
 export type Event = {
   id: number;
   action: string;
+  instance?: string | null;
+  actor?: string | null;
   node: string | null;
   request: string;
   created_at: string;
@@ -104,10 +117,15 @@ export type Event = {
 };
 export type Instance = {
   id: string;
+  owner: string;
   status: string;
   name: string;
   number: number;
   version: string;
+  definition: string;
+  active_tasks?: number;
+  open_incidents?: number;
+  observed_at: string;
   due_at: string;
   created_at: string;
   completed_at: string | null;
@@ -115,10 +133,17 @@ export type Instance = {
   xml: string;
   vars: unknown;
   tasks: Task[];
-  tokens: { id: string; node: string; status: string }[];
+  tokens: {
+    id: string;
+    node: string;
+    status: string;
+    stack: { fork: string; branch: string; split: string; join: string }[];
+  }[];
   events: Event[];
   jobs: {
     id: string;
+    node: string;
+    finished_at: string | null;
     kind: string;
     status: string;
     due_at: string;

@@ -196,7 +196,7 @@ def retry(conn, id, actor, request, note):
 def visible(conn, id, actor):
     item = one(
         conn,
-        """SELECT i.*,v.xml,v.number,d.name,u.name AS initiator FROM instances i JOIN versions v ON v.id=i.version
+        """SELECT i.*,v.xml,v.number,v.definition,d.name,u.name AS initiator FROM instances i JOIN versions v ON v.id=i.version
                     JOIN users u ON u.id=i.owner
                     JOIN definitions d ON d.id=v.definition WHERE i.id=:i""",
         i=id,
@@ -212,6 +212,7 @@ def visible(conn, id, actor):
         raise HTTPException(404, "INSTANCE_NOT_FOUND")
     return {
         **item,
+        "observed_at": now(conn),
         "tasks": tasks,
         "tokens": many(
             conn,
@@ -222,6 +223,12 @@ def visible(conn, id, actor):
             conn, "SELECT * FROM events WHERE instance=:i ORDER BY id", i=id
         ),
         "jobs": many(
-            conn, "SELECT * FROM jobs WHERE instance=:i ORDER BY due_at,id", i=id
+            conn,
+            """SELECT j.*,t.node,
+                       (SELECT e.created_at FROM events e WHERE e.instance=j.instance
+                           AND e.action IN ('TIMER_FIRED','SERVICE_DONE') AND e.detail->>'job'=j.id::text
+                           ORDER BY e.id LIMIT 1) AS finished_at
+                    FROM jobs j JOIN tokens t ON t.id=j.token WHERE j.instance=:i ORDER BY j.due_at,j.id""",
+            i=id,
         ),
     }

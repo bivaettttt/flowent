@@ -130,7 +130,7 @@ test("visual BPMN edit survives save, validation, deployment and execution", asy
   const published = page.waitForResponse((r) => r.url().endsWith("/publish"));
   await button(page, "Опубликовать сохранённое");
   expect((await published).status()).toBe(201);
-  await expect(page.getByRole("button", { name: "Открыть XML" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Открыть XML" })).toBeVisible();
   await shot(page, "versions");
   await swap(page, "employee");
   await page.getByLabel("Сумма, ₽").fill("12000");

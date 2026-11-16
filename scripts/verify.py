@@ -189,9 +189,9 @@ for attempt in (1, 2, 3):
     if attempt < 3:
         clock(10)
 assert state(failure)["status"] == "INCIDENT"
-incident = next(
-    row for row in call("admin", "GET", "incidents") if row["instance"] == failure["id"]
-)
+incident_path = f"incidents?instance={failure['id']}"
+incident = call("admin", "GET", incident_path)[0]
+assert incident["recovery"] == "OPEN" and incident["recovered_at"] is None
 clock(0, False)
 call(
     "admin",
@@ -200,10 +200,16 @@ call(
     {"note": "Предусловие восстановлено"},
 )
 wait(failure, lambda row: any(t["node"] == "Fulfil" for t in row["tasks"]))
+recovered = call("admin", "GET", incident_path)[0]
+assert recovered["id"] == incident["id"]
+assert recovered["recovery"] == "RECOVERED" and recovered["recovered_at"]
+assert recovered["resolved"] <= recovered["recovered_at"]
+call("employee", "GET", incident_path, expected=403)
 
 definition = defs["EXPENSE"]
 path = "process-definitions/" + definition["id"]
 old = start("EXPENSE", small)
+old_xml = state(old)["xml"]
 data = call("analyst", "GET", path)
 invalid = data["draft"].replace("userTask", "manualTask")
 call(
@@ -261,7 +267,14 @@ published = call(
 )
 assert old["version"] != published["id"]
 assert state(old)["version"] == old["version"]
-assert start("EXPENSE", small)["version"] == published["id"]
+assert state(old)["xml"] == old_xml
+new = start("EXPENSE", small)
+assert new["version"] == published["id"]
+assert state(new)["xml"] == updated["draft"]
+assert old["id"] not in {
+    row["id"]
+    for row in call("employee", "GET", f"process-instances?version={published['id']}")
+}
 try:
     with db.begin() as conn:
         sql(conn, "UPDATE versions SET xml='bad' WHERE id=:id", id=published["id"])
