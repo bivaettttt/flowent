@@ -2,6 +2,27 @@ let token = "";
 export const session = (value: string) => {
   token = value;
 };
+export type Problem = {
+  code?: string;
+  element?: string;
+  message?: string;
+  issues?: { field: string; rule: string }[];
+};
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public detail: string | Problem | undefined,
+    public requestId: string | null,
+  ) {
+    const message =
+      typeof detail === "string" ? detail : (detail?.message ?? detail?.code);
+    super(
+      [message ?? "Не удалось выполнить запрос", "HTTP " + status, requestId]
+        .filter(Boolean)
+        .join(" · "),
+    );
+  }
+}
 export async function api<T>(
   path: string,
   method = "GET",
@@ -19,16 +40,12 @@ export async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (res.status === 204) return undefined as T;
-  const data = await res.json();
-  if (!res.ok)
-    throw new Error(
-      (typeof data.detail === "string"
-        ? data.detail
-        : JSON.stringify(data.detail)) +
-        " · HTTP " +
-        res.status +
-        " · " +
-        (res.headers.get("X-Request-ID") ?? ""),
+  const data = await res.json().catch(() => undefined);
+  if (!res.ok || data === undefined)
+    throw new ApiError(
+      res.status,
+      data?.detail,
+      res.headers.get("X-Request-ID"),
     );
   return data;
 }

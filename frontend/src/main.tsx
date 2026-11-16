@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  ApiError,
   session,
   type User,
   type Definition,
@@ -76,12 +77,15 @@ function useAction(refresh: () => void) {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const keys = useRef(new Map<string, string>());
+  const inFlight = useRef(false);
   async function call<T>(
     path: string,
     method = "POST",
     body?: unknown,
     critical = false,
   ) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(undefined);
     const fingerprint = JSON.stringify([path, method, body]);
@@ -97,6 +101,7 @@ function useAction(refresh: () => void) {
     } catch (e) {
       setError(e);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -324,11 +329,59 @@ function Workspace() {
   const [rev, setRev] = useState(0);
   const refresh = () => setRev((r) => r + 1);
   const act = useAction(refresh);
+  const currentRoute = useRef(route);
+  const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
+  const [destination, setDestination] = useState<string | null>(null);
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  function navigate(next: string) {
+    currentRoute.current = next;
+    if (location.hash.slice(1) !== next) location.hash = next;
+    setRoute(next);
+  }
   useEffect(() => {
-    const change = () => setRoute(location.hash.slice(1) || "registry");
+    const change = () => {
+      const next = location.hash.slice(1) || "registry";
+      if (next === currentRoute.current) return;
+      if (leaveGuard.current) {
+        history.replaceState(history.state, "", "#" + currentRoute.current);
+        setDestination(next);
+        return;
+      }
+      currentRoute.current = next;
+      setRoute(next);
+    };
+    const unload = (event: BeforeUnloadEvent) => {
+      if (leaveGuard.current) {
+        event.preventDefault();
+        event.returnValue = true;
+      }
+    };
     window.addEventListener("hashchange", change);
-    return () => window.removeEventListener("hashchange", change);
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      window.removeEventListener("hashchange", change);
+      window.removeEventListener("beforeunload", unload);
+    };
   }, []);
+  useEffect(() => {
+    if (destination !== null) dialog.current?.showModal();
+    else dialog.current?.close();
+  }, [destination]);
+  function logout() {
+    void api("/auth/logout", "POST")
+      .then(() => {
+        session("");
+        setUser(null);
+      })
+      .catch(act.setError);
+  }
+  function acceptLeave(next: string) {
+    leaveGuard.current = null;
+    setDestination(null);
+    if (next === "logout") logout();
+    else navigate(next);
+  }
   if (!user) return <Login done={setUser} />;
   const staff = ["PROCESS_MANAGER", "ADMIN"].includes(user.role),
     work = ["EMPLOYEE", "APPROVER"].includes(user.role);
@@ -354,7 +407,71 @@ function Workspace() {
   const [page, id] = route.split("/");
   const props = { rev, refresh, user };
   return (
-    <div className="shell">
+    <div
+      className="shell"
+      onClickCapture={(event) => {
+        if (
+          !leaveGuard.current ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.altKey ||
+          event.shiftKey
+        )
+          return;
+        const anchor = (event.target as Element).closest("a[href^='#']");
+        const next = anchor?.getAttribute("href")?.slice(1);
+        if (next && next !== currentRoute.current) {
+          event.preventDefault();
+          setDestination(next);
+        }
+      }}
+    >
+      <dialog
+        ref={dialog}
+        aria-labelledby="leave-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          if (!leaveBusy) setDestination(null);
+        }}
+      >
+        <h2 id="leave-title">Несохранённые изменения</h2>
+        <p>Сохраните черновик или подтвердите выход без сохранения.</p>
+        <div className="toolbar">
+          <button
+            autoFocus
+            disabled={leaveBusy}
+            onClick={() => setDestination(null)}
+          >
+            Остаться в редакторе
+          </button>
+          <button
+            disabled={leaveBusy}
+            onClick={() => {
+              if (destination !== null) acceptLeave(destination);
+            }}
+          >
+            Выйти без сохранения
+          </button>
+          <button
+            className="primary"
+            disabled={leaveBusy}
+            onClick={() => {
+              if (destination === null || leaveBusy) return;
+              setLeaveBusy(true);
+              void leaveGuard
+                .current?.()
+                .then((saved) => {
+                  if (saved) acceptLeave(destination);
+                  else setDestination(null);
+                })
+                .finally(() => setLeaveBusy(false));
+            }}
+          >
+            Сохранить и выйти
+          </button>
+        </div>
+      </dialog>
       <aside>
         <Brand />
         <nav aria-label="Разделы">
@@ -381,12 +498,7 @@ function Workspace() {
             <button
               aria-label="Выйти"
               onClick={() =>
-                void api("/auth/logout", "POST")
-                  .then(() => {
-                    session("");
-                    setUser(null);
-                  })
-                  .catch(act.setError)
+                leaveGuard.current ? setDestination("logout") : logout()
               }
             >
               <LogOut size={16} />
@@ -399,7 +511,7 @@ function Workspace() {
             <Overview rev={rev} staff={staff} work={work} />
           ) : page === "registry" ? (
             id ? (
-              <Editor key={id} id={id} {...props} />
+              <Editor key={id} id={id} {...props} leaveGuard={leaveGuard} />
             ) : (
               <Registry {...props} />
             )
@@ -541,13 +653,30 @@ function Registry({ rev, refresh, user }: Props) {
     </>
   );
 }
-function Editor({ id, rev, refresh, user }: Props & { id: string }) {
+type Validation = {
+  xml: string;
+  result: { valid: boolean; nodes: number; flows: number; digest: string };
+};
+function Editor({
+  id,
+  rev,
+  refresh,
+  user,
+  leaveGuard,
+}: Props & {
+  id: string;
+  leaveGuard: { current: (() => Promise<boolean>) | null };
+}) {
   const path = defs + "/" + id;
   const data = useData<Definition>(path, rev);
   const d = data.data;
   const act = useAction(refresh);
   const [override, setOverride] = useState<string | null>(null);
-  const [validation, setValidation] = useState<unknown>();
+  const [validation, setValidation] = useState<Validation>();
+  const [dirty, setDirty] = useState(false);
+  const epoch = useRef(0);
+  const [validating, setValidating] = useState(false);
+  const [validationError, setValidationError] = useState<unknown>();
   const [version, setVersion] = useState<Definition["versions"][number] | null>(
     null,
   );
@@ -557,13 +686,72 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
     ["PROCESS_ANALYST", "ADMIN"].includes(user.role) &&
     !version &&
     !d?.archived;
+  function changed() {
+    epoch.current++;
+    setDirty(true);
+    setValidation(undefined);
+    setValidationError(undefined);
+  }
   async function xml() {
+    if (raw !== null) return raw;
     if (canvas.current) {
       const value = await canvas.current.saveXML({ format: true });
       if (value.xml) return value.xml;
     }
     return override ?? d?.draft ?? "";
   }
+  async function saveDraft() {
+    if (!d || !edit || act.busy) return false;
+    try {
+      const revision = epoch.current;
+      const contents = await xml();
+      if (epoch.current !== revision) return false;
+      const result = await act.call<Definition>(path, "PUT", {
+        name: d.name,
+        xml: contents,
+        revision: d.revision,
+      });
+      if (!result || epoch.current !== revision) return false;
+      setDirty(false);
+      setOverride(contents);
+      setRaw(null);
+      return true;
+    } catch (error) {
+      act.setError(error);
+      return false;
+    }
+  }
+  useEffect(() => {
+    leaveGuard.current = dirty ? saveDraft : null;
+    return () => {
+      leaveGuard.current = null;
+    };
+  });
+  async function validateDraft() {
+    if (!d || validating || act.busy) return;
+    const start = epoch.current;
+    setValidating(true);
+    setValidation(undefined);
+    setValidationError(undefined);
+    try {
+      const contents = dirty ? await xml() : (override ?? d.draft);
+      if (start !== epoch.current) return;
+      const result = await api<Validation["result"]>("/validate", "POST", {
+        name: d.name,
+        xml: contents,
+        revision: d.revision,
+      });
+      if (result && start === epoch.current)
+        setValidation({ xml: contents, result });
+    } catch (error) {
+      if (start === epoch.current) setValidationError(error);
+    } finally {
+      setValidating(false);
+    }
+  }
+  useEffect(() => {
+    if (!dirty && !version && override === d?.draft) setOverride(null);
+  }, [dirty, version, override, d?.draft]);
   if (!d)
     return (
       <>
@@ -592,13 +780,16 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
       />
       <ErrorBox error={act.error ?? data.error} />
       <Panel title="Модель BPMN">
-        <Diagram
-          xml={override ?? d.draft}
-          edit={edit}
-          ready={(value) => {
-            canvas.current = value;
-          }}
-        />
+        <div inert={act.busy && !validating}>
+          <Diagram
+            xml={override ?? d.draft}
+            edit={edit}
+            changed={changed}
+            ready={(value) => {
+              canvas.current = value;
+            }}
+          />
+        </div>
         <div className="pad toolbar">
           <button
             onClick={() =>
@@ -627,11 +818,18 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
                   accept=".bpmn,.xml"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file)
+                    if (
+                      file &&
+                      (!dirty ||
+                        window.confirm(
+                          "Заменить несохранённую модель импортированным XML?",
+                        ))
+                    )
                       void file.text().then((v) => {
                         canvas.current = null;
                         setOverride(v);
                         setRaw(null);
+                        changed();
                       });
                   }}
                 />
@@ -644,20 +842,7 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
               <button
                 className="primary"
                 disabled={act.busy}
-                onClick={() =>
-                  void xml()
-                    .then((xml) =>
-                      act.call(path, "PUT", {
-                        name: d.name,
-                        xml,
-                        revision: d.revision,
-                      }),
-                    )
-                    .then((r) => {
-                      if (r) setOverride(null);
-                    })
-                    .catch(act.setError)
-                }
+                onClick={() => void saveDraft()}
               >
                 Сохранить черновик
               </button>
@@ -667,19 +852,8 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
             user.role,
           ) && (
             <button
-              disabled={act.busy}
-              onClick={() =>
-                void xml()
-                  .then((xml) =>
-                    act.call("/validate", "POST", {
-                      name: d.name,
-                      xml,
-                      revision: d.revision,
-                    }),
-                  )
-                  .then(setValidation)
-                  .catch(act.setError)
-              }
+              disabled={act.busy || validating}
+              onClick={() => void validateDraft()}
             >
               Проверить модель
             </button>
@@ -688,12 +862,17 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
             <>
               <button
                 className="primary"
-                disabled={act.busy || d.archived}
+                disabled={
+                  act.busy || d.archived || dirty || validation?.xml !== d.draft
+                }
                 onClick={() =>
                   void act.call(
                     path + "/publish",
                     "POST",
-                    { revision: d.revision },
+                    {
+                      revision: d.revision,
+                      validated_digest: validation?.result.digest,
+                    },
                     true,
                   )
                 }
@@ -714,10 +893,41 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
             </>
           )}
         </div>
-        {validation !== undefined && (
-          <div className="pad" role="status">
-            Модель прошла проверку <Json data={validation} />
+        <div className="pad" role="status">
+          {validating ? (
+            "Модель проверяется…"
+          ) : validationError ? (
+            "Модель требует исправления"
+          ) : validation ? (
+            <>
+              Модель прошла проверку · {validation.result.nodes} узлов /{" "}
+              {validation.result.flows} связей
+            </>
+          ) : dirty ? (
+            "Несохранённые изменения · требуется проверка"
+          ) : (
+            "Проверьте текущую модель перед публикацией."
+          )}
+          {dirty && validation && (
+            <p>Изменения проверены. Сохраните черновик перед публикацией.</p>
+          )}
+        </div>
+        {validationError instanceof ApiError &&
+        typeof validationError.detail === "object" ? (
+          <div className="error pad" role="alert">
+            <strong>Ошибка проверки модели</strong>
+            <p>
+              {validationError.detail.message ?? validationError.detail.code}
+            </p>
+            {validationError.detail.element && (
+              <p>
+                Элемент · <code>{validationError.detail.element}</code>
+              </p>
+            )}
+            <p>Публикация заблокирована до успешной проверки.</p>
           </div>
+        ) : (
+          <ErrorBox error={validationError} />
         )}
       </Panel>
       {raw !== null && edit && (
@@ -732,7 +942,11 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
               <textarea
                 rows={16}
                 value={raw}
-                onChange={(e) => setRaw(e.target.value)}
+                disabled={act.busy}
+                onChange={(e) => {
+                  setRaw(e.target.value);
+                  changed();
+                }}
               />
             </label>
             <button
@@ -740,6 +954,7 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
                 canvas.current = null;
                 setOverride(raw);
                 setRaw(null);
+                changed();
               }}
             >
               Загрузить на холст
@@ -755,6 +970,7 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
               v.number,
               stamp(v.created_at),
               <button
+                disabled={dirty}
                 onClick={() =>
                   void act
                     .call<{ xml: string }>(path + "/versions/" + v.id, "GET")
@@ -763,6 +979,7 @@ function Editor({ id, rev, refresh, user }: Props & { id: string }) {
                         canvas.current = null;
                         setOverride(item.xml);
                         setVersion(v);
+                        setValidation(undefined);
                       }
                     })
                 }

@@ -10,7 +10,15 @@ from flowent.access import Actor, authenticate, passwords, role
 from flowent.engine import history, now, receipt
 from flowent.lab import Scenario, run
 from flowent.model import EMPTY_FORM, Invalid, compile_model
-from flowent.operations import publish, retry, start, task_access, task_action, visible
+from flowent.operations import (
+    model_digest,
+    publish,
+    retry,
+    start,
+    task_access,
+    task_action,
+    visible,
+)
 from flowent.store import db, many, one, sql
 
 app = FastAPI(
@@ -243,7 +251,12 @@ def archive(id: UUID, payload: c.Archive, actor: Actor, request: Request):
 def validate(payload: c.Update, actor: Actor):
     role(actor, *AUTHOR, *MANAGE)
     model = compile_model(payload.xml)
-    return {"valid": True, "nodes": len(model["nodes"]), "flows": len(model["flows"])}
+    return {
+        "valid": True,
+        "nodes": len(model["nodes"]),
+        "flows": len(model["flows"]),
+        "digest": model_digest(payload.xml),
+    }
 
 
 @app.post(D + "/{id}/publish", status_code=201)
@@ -254,8 +267,15 @@ def deploy(id: UUID, payload: c.Publish, actor: Actor, request: Request, key: Ke
             conn,
             actor["id"],
             key,
-            ["publish", id, payload.model_dump()],
-            lambda: publish(conn, id, actor["id"], request.state.id, payload.revision),
+            ["publish", id, payload.model_dump(exclude_none=True)],
+            lambda: publish(
+                conn,
+                id,
+                actor["id"],
+                request.state.id,
+                payload.revision,
+                payload.validated_digest,
+            ),
         )
 
 
@@ -282,9 +302,9 @@ def instances(
         return many(
             conn,
             """SELECT i.*,d.name,v.number FROM instances i JOIN versions v ON v.id=i.version
-                         JOIN definitions d ON d.id=v.definition WHERE (:staff OR owner=:u)
+                         JOIN definitions d ON d.id=v.definition WHERE (:staff OR i.owner=:u)
                          AND (CAST(:status AS text) IS NULL OR i.status=:status)
-                         ORDER BY i.created_at DESC LIMIT 50 OFFSET :offset""",
+                         ORDER BY i.created_at DESC,i.id DESC LIMIT 50 OFFSET :offset""",
             staff=actor["role"] in MANAGE,
             u=actor["id"],
             status=status,

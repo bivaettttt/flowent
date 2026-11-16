@@ -38,9 +38,13 @@ class Update(Strict):
 
 class Publish(Strict):
     revision: Revision
+    validated_digest: (
+        Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")] | None
+    ) = None
 
 
-class Archive(Publish):
+class Archive(Strict):
+    revision: Revision
     archived: bool
 
 

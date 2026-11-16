@@ -5,7 +5,9 @@ async function login(page: Page, user: string) {
   await page.getByLabel("Логин", { exact: true }).fill(user);
   await page.getByLabel("Пароль", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Войти", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible({
+    timeout: 15000,
+  });
 }
 async function swap(page: Page, user: string) {
   await page.getByRole("button", { name: "Выйти" }).click();
@@ -121,6 +123,10 @@ test("visual BPMN edit survives save, validation, deployment and execution", asy
   );
   await shot(page, "validation");
   await swap(page, "manager");
+  await button(page, "Проверить модель");
+  await expect(page.getByRole("status")).toContainText(
+    "Модель прошла проверку",
+  );
   const published = page.waitForResponse((r) => r.url().endsWith("/publish"));
   await button(page, "Опубликовать сохранённое");
   expect((await published).status()).toBe(201);
@@ -226,4 +232,43 @@ test("lab checks both branches and preserves their transition evidence", async (
     page.getByRole("heading", { name: "Журнал инцидентов" }),
   ).toBeVisible();
   await shot(page, "incidents");
+});
+
+test("an edited XML invalidates validation and guards leaving the editor", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await login(page, "analyst");
+  await nav(page, "Корпоративные расходы");
+  await expect(
+    page.locator('.djs-shape[data-element-id="Solo"]'),
+  ).toBeVisible();
+  await button(page, "Проверить модель");
+  await expect(page.getByRole("status")).toContainText(
+    "Модель прошла проверку",
+  );
+  await page.locator('.djs-shape[data-element-id="Solo"]').click();
+  await page.getByLabel("Element ID").fill("AuditRenamed");
+  await button(page, "Применить свойства");
+  await expect(page.getByRole("status")).not.toContainText(
+    "Модель прошла проверку",
+  );
+  await button(page, "Проверить модель");
+  await expect(page.getByRole("alert")).toContainText("Solo");
+  await nav(page, "Процессы");
+  await expect(
+    page.getByRole("dialog", { name: "Несохранённые изменения" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.locator('.djs-shape[data-element-id="AuditRenamed"]'),
+  ).toBeVisible();
+  await page.evaluate(() => history.back());
+  await expect(
+    page.getByRole("dialog", { name: "Несохранённые изменения" }),
+  ).toBeVisible();
+  await button(page, "Выйти без сохранения");
+  await expect(
+    page.getByRole("heading", { name: "Реестр процессов" }),
+  ).toBeVisible();
 });

@@ -42,6 +42,7 @@ export function Diagram({
   xml,
   edit,
   ready,
+  changed,
   active = [],
   completed = [],
   blocked = [],
@@ -49,6 +50,7 @@ export function Diagram({
   xml: string;
   edit?: boolean;
   ready?: (api: CanvasAPI) => void;
+  changed?: () => void;
   active?: string[];
   completed?: string[];
   blocked?: string[];
@@ -64,6 +66,8 @@ export function Diagram({
   const resetView = useRef<(() => void) | null>(null);
   const callback = useRef(ready);
   callback.current = ready;
+  const onChanged = useRef(changed);
+  onChanged.current = changed;
   useEffect(() => {
     const element = container.current!;
     const options = {
@@ -114,6 +118,10 @@ export function Diagram({
           for (const id of ids.split(","))
             if (registry.get(id)) visual.addMarker(id, marker);
         }
+        if (edit)
+          editor
+            .get<{ on(event: string, callback: () => void): void }>("eventBus")
+            .on("commandStack.changed", () => onChanged.current?.());
         callback.current?.(editor);
       })
       .catch((e) => {

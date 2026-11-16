@@ -1,4 +1,5 @@
 from datetime import timedelta
+from hashlib import sha256
 
 from fastapi import HTTPException
 
@@ -17,13 +18,20 @@ from flowent.store import many, one, pack, sql
 MANAGEMENT = {"PROCESS_MANAGER", "ADMIN"}
 
 
-def publish(conn, id, actor, request, revision):
+def model_digest(xml):
+    return sha256(xml.encode()).hexdigest()
+
+
+def publish(conn, id, actor, request, revision, validated_digest=None):
     definition = one(conn, "SELECT * FROM definitions WHERE id=:i FOR UPDATE", i=id)
     if not definition:
         raise HTTPException(404, "DEFINITION_NOT_FOUND")
     if definition["revision"] != revision or definition["archived"]:
         raise HTTPException(409, "REVISION_CONFLICT")
-    model = compile_model(definition["draft"])
+    draft = definition["draft"]
+    if validated_digest is not None and model_digest(draft) != validated_digest:
+        raise HTTPException(409, "VALIDATION_SNAPSHOT_CHANGED")
+    model = compile_model(draft)
     groups = {task["group"] for task in model["config"]["tasks"].values()} - {
         "employees"
     }

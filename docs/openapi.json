@@ -118,6 +118,18 @@
             "minimum": 1.0,
             "title": "Revision",
             "type": "integer"
+          },
+          "validated_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated Digest"
           }
         },
         "required": [

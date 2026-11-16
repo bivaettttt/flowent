@@ -103,6 +103,19 @@ approved = {"result": "approve", "comment": "Проверено"}
 large = {"amount": 150000, "purpose": "Синтетическая закупка", "category": "equipment"}
 small = {**large, "amount": 12000}
 parallel = start("EXPENSE", large)
+own = call("employee", "GET", "process-instances?status=RUNNING")
+assert parallel["id"] in {row["id"] for row in own}
+assert all(
+    row["owner"] == parallel["owner"] and row["status"] == "RUNNING" for row in own
+)
+assert parallel["id"] not in {
+    row["id"] for row in call("other", "GET", "process-instances")
+}
+assert parallel["id"] in {
+    row["id"] for row in call("manager", "GET", "process-instances")
+}
+page = call("admin", "GET", "process-instances?offset=1")
+assert not page or page[0]["id"] != parallel["id"]
 tasks = [task(parallel, "Lead"), task(parallel, "Second")]
 call("other", "GET", f"process-instances/{parallel['id']}", expected=404)
 task_cmd(tasks[1], "approver", "claim", expected=404)
@@ -200,6 +213,12 @@ call(
     {"name": "Invalid", "revision": 1, "xml": invalid},
     422,
 )
+check = call(
+    "analyst",
+    "POST",
+    "validate",
+    {"name": data["name"], "revision": data["revision"], "xml": data["draft"]},
+)
 updated = call(
     "analyst",
     "PUT",
@@ -207,8 +226,38 @@ updated = call(
     {"name": data["name"], "revision": data["revision"], "xml": data["draft"] + "\n"},
 )
 call("employee", "POST", path + "/publish", {"revision": updated["revision"]}, 403)
+assert (
+    call(
+        "manager",
+        "POST",
+        path + "/publish",
+        {"revision": updated["revision"], "validated_digest": check["digest"]},
+        409,
+    )["detail"]
+    == "VALIDATION_SNAPSHOT_CHANGED"
+)
+confirmed = call(
+    "manager",
+    "POST",
+    "validate",
+    {"name": updated["name"], "revision": updated["revision"], "xml": updated["draft"]},
+)
+assert (
+    call(
+        "manager",
+        "POST",
+        path + "/publish",
+        {"revision": data["revision"], "validated_digest": confirmed["digest"]},
+        409,
+    )["detail"]
+    == "REVISION_CONFLICT"
+)
 published = call(
-    "manager", "POST", path + "/publish", {"revision": updated["revision"]}, 201
+    "manager",
+    "POST",
+    path + "/publish",
+    {"revision": updated["revision"], "validated_digest": confirmed["digest"]},
+    201,
 )
 assert old["version"] != published["id"]
 assert state(old)["version"] == old["version"]
